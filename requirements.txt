@@ -1,0 +1,10 @@
+edge-tts
+google-genai
+kokoro>=0.9.4,<0.10
+numpy
+openai-whisper
+pywin32
+scipy
+sounddevice
+soundfile
+sympy

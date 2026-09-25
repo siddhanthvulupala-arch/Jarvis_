@@ -1,0 +1,7 @@
+.venv/
+.venv314/
+__pycache__/
+.tts_cache/
+data/
+*.pyc
+gemini_lock.json
