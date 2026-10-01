@@ -19,15 +19,22 @@ import time
 from urllib.parse import quote_plus
 import webbrowser
 import winsound
-import hashlib
+import signal
+import threading
+from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
 import whisper
-from google import genai
-from google.genai import types
 from scipy.io.wavfile import write
+from scipy.io import wavfile
+import sys
 from win32com.client import Dispatch
+from llm_manager.providers import GeminiProvider
+from voice_manager import VoiceManager, match_voice_switch
+import ui_bridge
+from ui_bridge import UIBridge, UIBridgeError, UnrelatedPortOccupiedError, StaleProcessCleanupError
+import hand_tracking_controller
 
 try:
     import sympy as sp
@@ -71,14 +78,16 @@ current_audio_process = None
 # GEMINI INIT
 # =========================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_SEARCH_MODEL = os.getenv("GEMINI_SEARCH_MODEL", "gemini-2.5-flash")
-client = None
+gemini_provider = GeminiProvider(
+    api_key=GEMINI_API_KEY,
+    model=GEMINI_MODEL,
+    search_model=GEMINI_SEARCH_MODEL,
+)
 
 if not GEMINI_API_KEY:
-    print("Gemini API key not found")
-else:
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    print("[GEMINI] Notice: GEMINI_API_KEY not set in environment. Using local rule engine.")
 
 # =========================
 # MEMORY + CONFIG
@@ -90,8 +99,68 @@ context = {
 }
 
 confidence_threshold = 0.15
-silence_threshold = 0.01
-mic_warmup_seconds = 1.0
+silence_threshold = float(os.getenv("JARVIS_SILENCE_THRESHOLD", "0.002"))
+mic_warmup_seconds = float(os.getenv("JARVIS_MIC_WARMUP", "0.2"))
+mic_warmup_done = False
+shutdown_requested = threading.Event()
+
+
+def get_selected_mic_device():
+    mic_env = os.getenv("JARVIS_MIC_DEVICE")
+    if mic_env is not None and mic_env.strip():
+        val = mic_env.strip()
+        try:
+            return int(val)
+        except ValueError:
+            for idx, dev in enumerate(sd.query_devices()):
+                if dev["max_input_channels"] > 0 and val.lower() in dev["name"].lower():
+                    return idx
+    return None
+
+
+def get_selected_mic_info():
+    dev_idx = get_selected_mic_device()
+    try:
+        if dev_idx is None:
+            dev_info = sd.query_devices(kind='input')
+        else:
+            dev_info = sd.query_devices(dev_idx)
+        return dev_idx, dev_info
+    except Exception:
+        return None, None
+
+
+def log_microphone_info():
+    dev_idx, dev_info = get_selected_mic_info()
+    try:
+        if dev_info:
+            name = dev_info.get("name", "Default Microphone")
+            sr = dev_info.get("default_samplerate", 16000)
+            hostapi = dev_info.get("hostapi", 0)
+            print(f"Active microphone: {name} (Device: {dev_idx}, HostAPI: {hostapi}, Default SR: {int(sr)}Hz, Threshold: {silence_threshold})")
+    except Exception as e:
+        print("Microphone info notice:", e)
+
+
+def request_shutdown(reason="user"):
+    if shutdown_requested.is_set():
+        return
+    shutdown_requested.set()
+    print(f"\n[JARVIS] Shutdown initiated ({reason})...")
+    if ui_bridge is not None:
+        try:
+            ui_bridge.set_state("offline")
+            ui_bridge.publish_response("Shutting down. Goodbye, boss.")
+            time.sleep(0.4)
+        except Exception:
+            pass
+    try:
+        sd.stop()
+    except Exception:
+        pass
+    if ui_bridge is not None:
+        stop_ui_bridge()
+    print("[JARVIS] Shutdown complete.")
 
 gemini_locked_until = None
 LOCK_FILE = "gemini_lock.json"
@@ -197,6 +266,7 @@ def set_voice_mode(mode):
         EDGE_VOICE = os.getenv("JARVIS_EDGE_VOICE", "en-US-JennyNeural")
         EDGE_RATE = "+0%"
         edge_tts_disabled = False
+        voice_manager.legacy_mode = mode
         setup_voice()
         return "Natural voice is on."
 
@@ -205,12 +275,14 @@ def set_voice_mode(mode):
         EDGE_VOICE = os.getenv("JARVIS_EDGE_VOICE", "en-US-JennyNeural")
         EDGE_RATE = "+18%"
         edge_tts_disabled = False
+        voice_manager.legacy_mode = mode
         setup_voice()
         return "Fast voice is on. Same vibe, less waiting."
 
     if mode == "robot":
         TTS_ENGINE = "sapi"
         voice_name = configure_sapi_voice(FALLBACK_VOICE_NAME)
+        voice_manager.legacy_mode = mode
         if voice_name:
             print("Jarvis voice:", voice_name)
         return "Robot backup voice is on."
@@ -371,6 +443,11 @@ async def edge_speak_async(text, cache_audio=False):
         wav_path = temp_audio.name
 
     try:
+        envelope = _generate_synthetic_speech_envelope(speech_text, max(0.5, len(speech_text.split()) * 0.32), fps=30)
+        duration = len(envelope) / 30.0
+        if ui_bridge is not None:
+            ui_bridge.start_speech(speech_text, duration, envelope, fps=30)
+
         if ffplay_path:
             run_audio_command(
                 [
@@ -396,6 +473,8 @@ async def edge_speak_async(text, cache_audio=False):
             )
             winsound.PlaySound(wav_path, winsound.SND_FILENAME)
     finally:
+        if ui_bridge is not None:
+            ui_bridge.stop_speech()
         try:
             os.remove(wav_path)
         except OSError:
@@ -411,6 +490,45 @@ async def edge_speak_async(text, cache_audio=False):
 
 def edge_speak(text, cache_audio=False):
     asyncio.run(edge_speak_async(text, cache_audio=cache_audio))
+
+
+def compute_audio_envelope(audio_samples, sample_rate=24000, fps=30):
+    if audio_samples is None or len(audio_samples) == 0 or sample_rate <= 0:
+        return []
+    hop_size = int(sample_rate / fps)
+    if hop_size <= 0:
+        return []
+    num_frames = int(len(audio_samples) / hop_size)
+    if num_frames == 0:
+        return [0.0]
+
+    rms_values = []
+    for i in range(num_frames):
+        frame = audio_samples[i * hop_size : (i + 1) * hop_size]
+        rms = float(np.sqrt(np.mean(frame ** 2)))
+        rms_values.append(rms)
+
+    peak = max(rms_values) if rms_values else 0.0
+    if peak > 0.0001:
+        envelope = [round(min(1.0, (val / peak) ** 0.85), 3) for val in rms_values]
+    else:
+        envelope = [0.0] * len(rms_values)
+    return envelope
+
+
+def _generate_synthetic_speech_envelope(text, duration, fps=30):
+    total_frames = max(1, int(duration * fps))
+    envelope = []
+    words = text.split()
+    if not words:
+        return [0.0] * total_frames
+    frames_per_word = max(2, total_frames / len(words))
+    for frame in range(total_frames):
+        word_progress = (frame % frames_per_word) / frames_per_word
+        val = math.sin(word_progress * math.pi) ** 1.5
+        jitter = 0.15 * math.sin(frame * 1.7)
+        envelope.append(round(max(0.05, min(1.0, val + jitter)), 3))
+    return envelope
 
 
 def kokoro_speak(text):
@@ -502,11 +620,24 @@ def kokoro_speak(text):
     if not chunks:
         raise RuntimeError("Kokoro returned no speech audio")
 
-    sd.play(np.concatenate(chunks), samplerate=KOKORO_SAMPLE_RATE)
-    sd.wait()
+    full_audio = np.concatenate(chunks)
+    duration = float(len(full_audio) / KOKORO_SAMPLE_RATE)
+    envelope = compute_audio_envelope(full_audio, KOKORO_SAMPLE_RATE, fps=30)
+    if ui_bridge is not None:
+        ui_bridge.start_speech(text, duration, envelope, fps=30)
+    try:
+        sd.play(full_audio, samplerate=KOKORO_SAMPLE_RATE)
+        sd.wait()
+    finally:
+        if ui_bridge is not None:
+            ui_bridge.stop_speech()
 
 
 def sapi_speak(text):
+    duration = max(0.5, len(text.split()) * 0.38)
+    envelope = _generate_synthetic_speech_envelope(text, duration, fps=30)
+    if ui_bridge is not None:
+        ui_bridge.start_speech(text, duration, envelope, fps=30)
     try:
         speaker.Speak(text)
     except KeyboardInterrupt:
@@ -515,6 +646,9 @@ def sapi_speak(text):
         except Exception:
             pass
         print("Speech interrupted.")
+    finally:
+        if ui_bridge is not None:
+            ui_bridge.stop_speech()
 
 
 def get_whisper_model():
@@ -529,9 +663,20 @@ def get_whisper_model():
 
 
 def speak(text, cache_tts=False):
-    global edge_tts_disabled, kokoro_disabled
-
     print("Jarvis:", text)
+    if ui_bridge is not None:
+        ui_bridge.publish_response(str(text))
+    try:
+        voice_manager.speak(text, cache_tts=cache_tts)
+    finally:
+        if ui_bridge is not None:
+            target_state = "listening" if ui_bridge.mode == "voice" else "idle"
+            ui_bridge.set_state(target_state)
+
+
+def _legacy_speak(text, cache_tts=False):
+    """Keep existing natural, fast, and robot voice modes available."""
+    global edge_tts_disabled, kokoro_disabled
     try:
         if TTS_ENGINE == "kokoro" and not kokoro_disabled:
             kokoro_speak(text)
@@ -552,6 +697,89 @@ def speak(text, cache_tts=False):
             sapi_speak(text)
         except Exception as fallback_error:
             print("Fallback TTS error:", fallback_error)
+
+
+def play_elevenlabs_audio(path):
+    ffplay_path = shutil.which("ffplay")
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffplay_path:
+        run_audio_command([ffplay_path, "-nodisp", "-autoexit", "-loglevel", "quiet", path])
+        return
+    if not ffmpeg_path:
+        raise RuntimeError("ffplay or ffmpeg is required to play ElevenLabs audio")
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
+        wav_path = temp_audio.name
+    try:
+        run_audio_command([ffmpeg_path, "-y", "-loglevel", "error", "-i", path, wav_path])
+        winsound.PlaySound(wav_path, winsound.SND_FILENAME)
+    finally:
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
+
+
+voice_manager = VoiceManager(
+    kokoro_speak=kokoro_speak,
+    sapi_speak=sapi_speak,
+    play_audio=play_elevenlabs_audio,
+    state_path=Path(__file__).resolve().parent / "data" / "voice_profile.json",
+    legacy_speak=_legacy_speak,
+)
+ui_bridge = None
+
+
+def get_jarvis_telemetry():
+    count, total_size = get_tts_cache_stats()
+    brain_name = "Gemini 2.5 Flash" if os.getenv("GEMINI_API_KEY") else "Local Rule Engine"
+    return {
+        "voice_profile": voice_manager.profile.upper(),
+        "tts_engine": TTS_ENGINE.upper(),
+        "kokoro_voice": KOKORO_VOICE,
+        "stt_engine": "WHISPER-TINY",
+        "brain": brain_name,
+        "daily_requests": daily_requests,
+        "max_requests": MAX_DAILY_REQUESTS,
+        "tts_cache_count": count,
+        "tts_cache_size": format_bytes(total_size),
+    }
+
+
+def start_ui_bridge():
+    global ui_bridge
+    if ui_bridge is not None:
+        return
+    try:
+        ui_bridge = UIBridge(
+            ui_path=Path(__file__).resolve().parent / "UI" / "UI.html",
+            handle_text=handle_text,
+            port=int(os.getenv("JARVIS_UI_PORT", "8765")),
+        )
+        ui_bridge.set_telemetry_provider(get_jarvis_telemetry)
+        ui_url = ui_bridge.start()
+        print("JARVIS UI bridge:", ui_url)
+        try:
+            webbrowser.open(ui_url)
+        except Exception as error:
+            print("Could not open the JARVIS UI automatically:", error)
+    except UIBridgeError as error:
+        ui_bridge = None
+        print(f"\n[FATAL] JARVIS UI bridge error: {error}\nAborting startup.")
+        sys.exit(1)
+    except Exception as error:
+        ui_bridge = None
+        print(f"\n[FATAL] Failed to start JARVIS UI bridge: {error}\nAborting startup.")
+        sys.exit(1)
+
+
+def stop_ui_bridge():
+    global ui_bridge
+    if ui_bridge is not None:
+        try:
+            ui_bridge.stop()
+        except Exception as error:
+            print("UI bridge shutdown error:", error)
+        ui_bridge = None
 
 
 def local_speak(text):
@@ -632,10 +860,13 @@ def preprocess_audio(audio):
 # 5. LISTEN - SIRI-STYLE
 # ==================================
 def listen(duration=5, device=None):
+    global mic_warmup_done
     fs = 16000
+    if device is None:
+        device = get_selected_mic_device()
 
     try:
-        if mic_warmup_seconds > 0:
+        if not mic_warmup_done and mic_warmup_seconds > 0:
             print("Getting microphone ready...")
             sd.rec(
                 int(mic_warmup_seconds * fs),
@@ -645,9 +876,10 @@ def listen(duration=5, device=None):
                 device=device,
             )
             sd.wait()
+            mic_warmup_done = True
 
         print("Speak now...")
-        time.sleep(0.15)
+        time.sleep(0.05)
 
         audio = sd.rec(
             int(duration * fs),
@@ -666,6 +898,9 @@ def listen(duration=5, device=None):
     if volume < silence_threshold:
         print("No speech detected")
         return "", None
+
+    if ui_bridge is not None:
+        ui_bridge.set_state("thinking")
 
     audio = audio.flatten()
     audio = preprocess_audio(audio)
@@ -866,6 +1101,9 @@ def needs_realtime_data(text):
 def route(text, intents):
     text = text.lower().strip()
 
+    if match_voice_switch(text):
+        return "local"
+
     if text in ["stop speaking", "stop talking"]:
         return "local"
 
@@ -913,6 +1151,12 @@ def route(text, intents):
         "how are you",
         "who are you",
         "what can you do",
+        "turn on hand tracking",
+        "enable hand tracking",
+        "start hand tracking",
+        "turn off hand tracking",
+        "disable hand tracking",
+        "stop hand tracking",
         "list voices",
         "voice test",
         "clear voice cache",
@@ -969,6 +1213,8 @@ def load_lock():
             gemini_locked_until = datetime.datetime.fromisoformat(data["locked_until"])
     except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError):
         gemini_locked_until = None
+
+    gemini_provider.locked_until = gemini_locked_until
 
 
 def save_lock():
@@ -1229,13 +1475,12 @@ def clear_ai_memory():
 def gemini_brain(text, use_grounding=False):
     global gemini_locked_until, daily_requests
 
-    if gemini_locked_until:
-        if datetime.datetime.now() < gemini_locked_until:
-            print("Gemini locked until:", gemini_locked_until)
-            return None
-        gemini_locked_until = None
+    if gemini_provider.is_locked():
+        gemini_locked_until = gemini_provider.locked_until
+        return None
+    gemini_locked_until = gemini_provider.locked_until
 
-    if not GEMINI_API_KEY or client is None:
+    if not GEMINI_API_KEY or gemini_provider.client is None:
         return None
 
     if daily_requests >= MAX_DAILY_REQUESTS:
@@ -1243,18 +1488,9 @@ def gemini_brain(text, use_grounding=False):
         return None
 
     try:
-        model_name = GEMINI_SEARCH_MODEL if use_grounding else GEMINI_MODEL
-        config = None
-
         if use_grounding:
             print("Gemini grounding: Google Search")
-            config = types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-            )
-
-        response = client.models.generate_content(
-            model=model_name,
-            contents=f"""
+        prompt = f"""
 You are Jarvis, a real-time personal assistant for the user.
 Voice style:
 - Sound alive, calm, observant, and capable, like a modern Tony Stark assistant.
@@ -1285,9 +1521,16 @@ Recent conversation:
 {format_ai_memory()}
 
 User question: {text}
-""",
-            config=config,
-        )
+"""
+
+        previous_lock = gemini_locked_until
+        reply = gemini_provider.generate(prompt, use_grounding=use_grounding)
+        gemini_locked_until = gemini_provider.locked_until
+        if gemini_locked_until and gemini_locked_until != previous_lock:
+            save_lock()
+
+        if reply is None:
+            return None
 
         daily_requests += 1
         save_usage()
@@ -1295,7 +1538,6 @@ User question: {text}
         usage_label = "grounded" if use_grounding else "standard"
         print(f"Gemini usage: {daily_requests}/{MAX_DAILY_REQUESTS} ({usage_label})")
 
-        reply = (response.text or "").strip()
         if reply:
             remember_ai_exchange(text, reply)
 
@@ -1303,22 +1545,6 @@ User question: {text}
 
     except Exception as e:
         print("Gemini Error:", e)
-
-        if "429" in str(e) or "quota" in str(e).lower():
-            now = datetime.datetime.utcnow()
-            pt_now = now - datetime.timedelta(hours=7)
-            tomorrow = pt_now + datetime.timedelta(days=1)
-
-            gemini_locked_until = tomorrow.replace(
-                hour=0,
-                minute=0,
-                second=0,
-                microsecond=0,
-            )
-
-            print("Gemini locked until:", gemini_locked_until)
-            save_lock()
-
         return None
 
 
@@ -1409,6 +1635,12 @@ def greeting_reply():
 
 
 def local_brain(text):
+    target_voice = match_voice_switch(text)
+    if target_voice:
+        voice_manager.switch_profile(target_voice)
+        local_speak(f"Voice switched to {target_voice.upper()}.")
+        return True
+
     if text in ["hello", "hi", "hey", "hey there", "yo"]:
         local_speak(greeting_reply())
         return True
@@ -1573,6 +1805,16 @@ def local_brain(text):
             local_speak("No previous search found")
         return True
 
+    if "turn on hand tracking" in text or "enable hand tracking" in text or "start hand tracking" in text:
+        local_speak("Starting hand tracking")
+        hand_tracking_controller.start_hand_tracking(ui_bridge, process_nervous_system_event)
+        return True
+
+    if "turn off hand tracking" in text or "disable hand tracking" in text or "stop hand tracking" in text:
+        local_speak("Stopping hand tracking")
+        hand_tracking_controller.stop_hand_tracking()
+        return True
+
     if "search" in text:
         query = text.replace("search", "").strip()
         if not query:
@@ -1731,8 +1973,9 @@ def handle(intents, text):
     update_context(intents[0], text)
 
     if decision == "exit":
-        local_speak("Shutting down")
-        raise SystemExit(0)
+        local_speak("Shutting down. Goodbye.")
+        request_shutdown("exit_command")
+        return
 
     if decision == "math" and math_brain(text):
         return
@@ -1778,61 +2021,153 @@ def handle_text(text):
 
     intents = get_intent(text)
     print("INTENTS:", intents, "| CONTEXT:", context)
-    handle(intents, text)
+    if ui_bridge is not None:
+        ui_bridge.set_state("thinking")
+    try:
+        handle(intents, text)
+    finally:
+        if ui_bridge is not None and ui_bridge.state not in ("idle", "error"):
+            target_state = "listening" if ui_bridge.mode == "voice" else "idle"
+            ui_bridge.set_state(target_state)
 
 
 # =========================
-# 8. MAIN LOOP
+# 8. NERVOUS SYSTEM ROUTER
+# =========================
+def process_nervous_system_event(event_data: dict):
+    """
+    Decoupled cognitive layer: processes structured events from external sensors.
+    """
+    if event_data.get("type") == "gesture":
+        gesture = event_data.get("gesture", "").upper()
+        confidence = event_data.get("confidence", 0.0)
+        
+        if confidence < 0.7:
+            return
+
+        print(f"\n[NERVOUS SYSTEM] Detected {gesture} (confidence {confidence})")
+        
+        if gesture == "FIST":
+            print("[ACTION] Triggering STOP_SPEAKING")
+            stop_speaking()
+        elif gesture == "OPEN_PALM":
+            print("[ACTION] Detected OPEN_PALM (Voice mode activation disabled during debugging)")
+            # if ui_bridge is not None:
+            #     ui_bridge.set_mode("voice")
+        elif gesture == "POINT":
+            print("[ACTION] Triggering ENTER_SELECTION_MODE")
+        elif gesture == "PINCH":
+            print("[ACTION] Triggering SELECT/CONFIRM")
+
+    elif event_data.get("type") == "motion":
+        direction = event_data.get("direction", "").upper()
+        velocity = event_data.get("velocity", 0.0)
+        print(f"\n[NERVOUS SYSTEM] Detected SWIPE_{direction} (velocity {velocity})")
+        
+        if direction in ["LEFT", "RIGHT", "UP", "DOWN"]:
+            print(f"[ACTION] Triggering SWIPE_{direction} event")
+
+
+# =========================
+# 9. MAIN LOOP
 # =========================
 def main():
-    setup_voice()
-    load_lock()
-    load_usage()
-    print("Jarvis Is Ready")
+    start_ui_bridge()
+    if ui_bridge is not None:
+        ui_bridge.set_mode("voice")
+    try:
+        setup_voice()
+        log_microphone_info()
+        load_lock()
+        load_usage()
+        print("Jarvis Is Ready")
 
-    while True:
-        try:
-            text, result = listen()
-        except KeyboardInterrupt:
-            print("\nShutting down safely...")
-            break
+        while not shutdown_requested.is_set():
+            if ui_bridge is not None and not ui_bridge.should_listen():
+                if ui_bridge.state != "idle":
+                    ui_bridge.set_state("idle")
+                time.sleep(0.15)
+                continue
+            if shutdown_requested.is_set():
+                break
+            if ui_bridge is not None:
+                ui_bridge.set_state("listening")
+            try:
+                text, result = listen()
+            except KeyboardInterrupt:
+                request_shutdown("keyboard_interrupt")
+                break
 
-        text = normalize_text(text)
-        print("Heard:", text)
+            text = normalize_text(text)
+            print("Heard:", text)
 
-        if not text:
-            continue
+            if not text:
+                continue
 
-        confidence = get_confidence(result)
-        print(f"Confidence: {confidence:.2f}")
+            if ui_bridge is not None:
+                ui_bridge.publish_user_speech(text)
+                ui_bridge.set_state("thinking")
 
-        intents = get_intent(text)
-        decision = route(text, intents)
+            confidence = get_confidence(result)
+            print(f"Confidence: {confidence:.2f}")
 
-        if confidence < confidence_threshold and decision == "ai":
-            local_speak("Sorry, I didn't catch that properly")
-            continue
+            intents = get_intent(text)
+            decision = route(text, intents)
 
-        print("INTENTS:", intents, "| CONTEXT:", context)
+            if confidence < confidence_threshold and decision == "ai":
+                local_speak("Sorry, I didn't catch that properly")
+                continue
 
-        try:
-            handle(intents, text)
-        except SystemExit:
-            break
+            print("INTENTS:", intents, "| CONTEXT:", context)
+
+            try:
+                handle(intents, text)
+            except SystemExit:
+                break
+            except Exception as error:
+                print("JARVIS request error:", error)
+                if ui_bridge is not None:
+                    ui_bridge.publish_error("JARVIS could not complete that request.")
+            finally:
+                if ui_bridge is not None and ui_bridge.state != "error" and not shutdown_requested.is_set():
+                    target_state = "listening" if ui_bridge.mode == "voice" else "idle"
+                    ui_bridge.set_state(target_state)
+    finally:
+        request_shutdown("main_loop_exit")
 
 
 def debug_text_loop():
-    setup_voice()
-    load_lock()
-    load_usage()
-    print("Jarvis text debug mode. Type a command, or type exit.")
+    start_ui_bridge()
+    if ui_bridge is not None:
+        ui_bridge.set_mode("text")
+    try:
+        setup_voice()
+        load_lock()
+        load_usage()
+        print("Jarvis text debug mode. Type a command, or type exit.")
 
-    while True:
-        text = input("> ")
-        try:
+        while not shutdown_requested.is_set():
+            try:
+                text = input("> ")
+            except (KeyboardInterrupt, EOFError):
+                request_shutdown("keyboard_interrupt")
+                break
             handle_text(text)
-        except SystemExit:
-            break
+    finally:
+        request_shutdown("debug_loop_exit")
+
+
+def _sig_handler(sig, frame):
+    request_shutdown("signal")
+    sys.exit(0)
+
+
+try:
+    signal.signal(signal.SIGINT, _sig_handler)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _sig_handler)
+except Exception:
+    pass
 
 
 # =========================

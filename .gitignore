@@ -5,3 +5,4 @@ __pycache__/
 data/
 *.pyc
 gemini_lock.json
+.jarvis.pid

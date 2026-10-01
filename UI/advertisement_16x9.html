@@ -1,0 +1,1538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JARVIS Advertisement // Cinematic 16:9 Showcase</title>
+    <style>
+        :root {
+            --primary: #ffaa00;
+            --primary-glow: rgba(255, 170, 0, 0.45);
+            --primary-bright: #ffd700;
+            --secondary: #ff4500;
+            --secondary-glow: rgba(255, 69, 0, 0.5);
+            --dark-bg: #020100;
+            --panel-bg: rgba(12, 7, 2, 0.88);
+            --panel-border: rgba(255, 170, 0, 0.32);
+            --alert-red: #ff5232;
+            --success-green: #68d391;
+            --cyan-neural: #00e5ff;
+        }
+
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #040201;
+            font-family: 'Courier New', Courier, monospace;
+            color: var(--primary);
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+        }
+
+        /* 16:9 Stage Container */
+        #stage-wrapper {
+            position: relative;
+            width: 96vw;
+            max-width: 177.78vh;
+            aspect-ratio: 16 / 9;
+            background: var(--dark-bg);
+            box-shadow: 0 0 60px rgba(0, 0, 0, 0.95), 0 0 40px rgba(255, 170, 0, 0.12);
+            border: 1px solid rgba(255, 170, 0, 0.28);
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #render-canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        #webgl-canvas {
+            display: none;
+        }
+
+        /* Interactive Controls Bar for Browser Playback */
+        #controls-bar {
+            position: fixed;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(12, 7, 2, 0.92);
+            border: 1px solid var(--panel-border);
+            border-radius: 6px;
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 11px;
+            letter-spacing: 1.5px;
+            z-index: 100;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.85);
+        }
+
+        .btn {
+            background: rgba(255, 170, 0, 0.12);
+            border: 1px solid rgba(255, 170, 0, 0.5);
+            color: var(--primary-bright);
+            padding: 6px 14px;
+            font: inherit;
+            cursor: pointer;
+            letter-spacing: inherit;
+            transition: all 180ms ease;
+        }
+        .btn:hover {
+            background: rgba(255, 170, 0, 0.25);
+            border-color: #ffffff;
+            box-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        #time-slider {
+            width: 240px;
+            accent-color: var(--primary-bright);
+            cursor: pointer;
+        }
+
+        #time-display {
+            font-size: 11px;
+            color: #ffe8be;
+            min-width: 65px;
+        }
+
+        #scene-badge {
+            font-size: 10px;
+            color: var(--primary-bright);
+            letter-spacing: 1px;
+            border-left: 1px solid rgba(255, 170, 0, 0.3);
+            padding-left: 12px;
+        }
+    </style>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "./vendor/three.module.js",
+            "three/addons/": "./vendor/"
+        }
+    }
+    </script>
+</head>
+<body>
+
+    <div id="stage-wrapper">
+        <canvas id="render-canvas" width="1920" height="1080"></canvas>
+    </div>
+
+    <!-- Hidden Offscreen WebGL Canvas -->
+    <canvas id="webgl-canvas" width="1920" height="1080"></canvas>
+
+    <!-- Browser Interactive Controls -->
+    <div id="controls-bar">
+        <button id="btn-play" class="btn">PAUSE</button>
+        <button id="btn-restart" class="btn">RESTART</button>
+        <input type="range" id="time-slider" min="0" max="34.0" step="0.033" value="0">
+        <span id="time-display">00.00s</span>
+        <span id="scene-badge">SCENE 1 // WAKE</span>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- CONSTANTS & CONFIGURATION ---
+        const WIDTH = 1920;
+        const HEIGHT = 1080;
+        const DURATION = 34.0; // 34 seconds total
+        const FPS = 30;
+        const TOTAL_FRAMES = Math.floor(DURATION * FPS); // 1020 frames
+
+        // DOM elements
+        const webglCanvas = document.getElementById('webgl-canvas');
+        const renderCanvas = document.getElementById('render-canvas');
+        const ctx = renderCanvas.getContext('2d');
+        const btnPlay = document.getElementById('btn-play');
+        const btnRestart = document.getElementById('btn-restart');
+        const timeSlider = document.getElementById('time-slider');
+        const timeDisplay = document.getElementById('time-display');
+        const sceneBadge = document.getElementById('scene-badge');
+
+        let isPlaying = true;
+        let currentTime = 0;
+        let lastFrameTimestamp = performance.now();
+        let isRecordingMode = false;
+
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('record') === '1') {
+            isRecordingMode = true;
+            isPlaying = false;
+            document.getElementById('controls-bar').style.display = 'none';
+            document.body.style.background = '#000000';
+            const wrapper = document.getElementById('stage-wrapper');
+            wrapper.style.width = '100vw';
+            wrapper.style.maxWidth = 'none';
+            wrapper.style.height = '100vh';
+            wrapper.style.borderRadius = '0';
+            wrapper.style.border = 'none';
+        }
+
+        // --- THREE.JS SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x020100);
+        scene.fog = new THREE.FogExp2(0x020100, 0.0015);
+
+        // Dynamic 16:9 Landscape Camera
+        const camera = new THREE.PerspectiveCamera(46, WIDTH / HEIGHT, 0.1, 2000);
+        camera.position.set(0, 0, 280);
+
+        const renderer = new THREE.WebGLRenderer({
+            canvas: webglCanvas,
+            antialias: true,
+            alpha: false,
+            preserveDrawingBuffer: true,
+            powerPreference: "high-performance"
+        });
+        renderer.setPixelRatio(1);
+        renderer.setSize(WIDTH, HEIGHT);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.25;
+
+        // Unreal Bloom Post-Processing
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(
+            new THREE.Vector2(WIDTH, HEIGHT),
+            1.45, // strength
+            0.55, // radius
+            0.22  // threshold
+        );
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- HOLOGRAPHIC CORE ARCHITECTURE (SOURCE OF TRUTH: UI.html) ---
+        const jarvisCore = new THREE.Group();
+        const innerLayers = new THREE.Group();
+        const middleLayers = new THREE.Group();
+        const outerLayers = new THREE.Group();
+        const ambientParticlesGroup = new THREE.Group();
+
+        scene.add(jarvisCore);
+        scene.add(innerLayers);
+        scene.add(middleLayers);
+        scene.add(outerLayers);
+        scene.add(ambientParticlesGroup);
+
+        const colors = {
+            white: new THREE.Color(0xffffff),
+            gold: new THREE.Color(0xffd700),
+            brightOrange: new THREE.Color(0xff8c00),
+            orange: new THREE.Color(0xff4500),
+            deepOrange: new THREE.Color(0x8b2500),
+            cyan: new THREE.Color(0x00e5ff)
+        };
+
+        const matMicro = new THREE.PointsMaterial({ size: 0.45, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.5, depthWrite: false });
+        const matSmall = new THREE.PointsMaterial({ size: 0.9, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.8, depthWrite: false });
+        const matMedium = new THREE.PointsMaterial({ size: 1.6, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
+        const matCore = new THREE.PointsMaterial({ size: 2.6, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, opacity: 1.0, depthWrite: false });
+        
+        const matLineFaint = new THREE.LineBasicMaterial({ vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.16, depthWrite: false });
+        const matLineBright = new THREE.LineBasicMaterial({ vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.65, depthWrite: false });
+
+        function getNoise(x, y, z, freq) {
+            return (Math.sin(x * freq) + Math.cos(y * freq) + Math.sin(z * freq)) / 3;
+        }
+
+        // 1. Central Core Wireframe and Highlights
+        function buildIntricateCore() {
+            const lineGeo = new THREE.BufferGeometry();
+            const linePos = [];
+            const lineCol = [];
+
+            for(let i = 0; i < 3000; i++) {
+                const r = 2.5 + Math.random() * 14;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+                
+                const x1 = r * Math.sin(phi) * Math.cos(theta);
+                const y1 = r * Math.sin(phi) * Math.sin(theta);
+                const z1 = r * Math.cos(phi);
+
+                const x2 = x1 + (Math.random() - 0.5) * 3.5;
+                const y2 = y1 + (Math.random() - 0.5) * 3.5;
+                const z2 = z1 + (Math.random() - 0.5) * 3.5;
+
+                linePos.push(x1, y1, z1, x2, y2, z2);
+                const c = Math.random() > 0.94 ? colors.white : colors.gold;
+                lineCol.push(c.r, c.g, c.b, c.r, c.g, c.b);
+            }
+            lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
+            lineGeo.setAttribute('color', new THREE.Float32BufferAttribute(lineCol, 3));
+            jarvisCore.add(new THREE.LineSegments(lineGeo, matLineBright));
+
+            const ptGeo = new THREE.BufferGeometry();
+            const ptPos = [];
+            const ptCol = [];
+            for(let i = 0; i < 550; i++) {
+                const r = Math.pow(Math.random(), 2) * 9.5;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+                ptPos.push(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
+                const c = Math.random() > 0.8 ? colors.white : colors.gold;
+                ptCol.push(c.r, c.g, c.b);
+            }
+            ptGeo.setAttribute('position', new THREE.Float32BufferAttribute(ptPos, 3));
+            ptGeo.setAttribute('color', new THREE.Float32BufferAttribute(ptCol, 3));
+            jarvisCore.add(new THREE.Points(ptGeo, matCore));
+        }
+
+        // 2. Clustered Data Network
+        function buildClusteredDataNetwork(radius, numClusters, pointsPerCluster, targetGroup, isInner) {
+            const ptPos = [], ptCol = [];
+            const linePos = [], lineCol = [];
+
+            for (let i = 0; i < numClusters; i++) {
+                const cTheta = Math.random() * Math.PI * 2;
+                const cPhi = Math.acos(2 * Math.random() - 1);
+                const cRadius = radius + (Math.random() - 0.5) * (radius * 0.2); 
+                
+                const cx = cRadius * Math.sin(cPhi) * Math.cos(cTheta);
+                const cy = cRadius * Math.sin(cPhi) * Math.sin(cTheta);
+                const cz = cRadius * Math.cos(cPhi);
+
+                let baseColor;
+                if (isInner) {
+                    baseColor = Math.random() > 0.3 ? colors.brightOrange : colors.gold;
+                } else {
+                    baseColor = Math.random() > 0.6 ? colors.brightOrange : (Math.random() > 0.5 ? colors.orange : colors.deepOrange);
+                }
+
+                for (let j = 0; j < pointsPerCluster; j++) {
+                    const spread = isInner ? 11 : 26;
+                    const px = cx + (Math.random() - 0.5) * spread;
+                    const py = cy + (Math.random() - 0.5) * spread;
+                    const pz = cz + (Math.random() - 0.5) * spread;
+
+                    if (Math.abs(getNoise(px, py, pz, 0.1)) > 0.15) {
+                        ptPos.push(px, py, pz);
+                        const r = baseColor.r * (0.8 + Math.random() * 0.4);
+                        const g = baseColor.g * (0.8 + Math.random() * 0.4);
+                        const b = baseColor.b * (0.8 + Math.random() * 0.4);
+                        ptCol.push(Math.min(r, 1), Math.min(g, 1), Math.min(b, 1));
+
+                        if (Math.random() > 0.8) {
+                            linePos.push(px, py, pz);
+                            const traceLength = 2.5 + Math.random() * 5.5;
+                            const tx = px + (Math.random() > 0.5 ? traceLength : 0);
+                            const ty = py + (Math.random() > 0.5 ? traceLength : 0);
+                            const tz = pz + (Math.random() > 0.5 ? traceLength : 0);
+                            linePos.push(tx, ty, tz);
+                            lineCol.push(r, g, b, r, g, b);
+                        }
+                    }
+                }
+            }
+
+            const pGeo = new THREE.BufferGeometry();
+            pGeo.setAttribute('position', new THREE.Float32BufferAttribute(ptPos, 3));
+            pGeo.setAttribute('color', new THREE.Float32BufferAttribute(ptCol, 3));
+            targetGroup.add(new THREE.Points(pGeo, isInner ? matSmall : matMicro));
+
+            const lGeo = new THREE.BufferGeometry();
+            lGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
+            lGeo.setAttribute('color', new THREE.Float32BufferAttribute(lineCol, 3));
+            targetGroup.add(new THREE.LineSegments(lGeo, isInner ? matLineBright : matLineFaint));
+        }
+
+        // 3. Shattered Shells
+        function buildShatteredShells(radius, numArcs, targetGroup) {
+            const linePos = [];
+            const lineCol = [];
+            const ptPos = [];
+            const ptCol = [];
+
+            for (let i = 0; i < numArcs; i++) {
+                const axisX = Math.random() * Math.PI * 2;
+                const axisY = Math.random() * Math.PI * 2;
+                let currentAngle = Math.random() * Math.PI * 2;
+                const sweep = (Math.PI / 4) + Math.random() * Math.PI;
+                const arcRadius = radius + (Math.random() - 0.5) * 15;
+                const color = Math.random() > 0.7 ? colors.gold : colors.brightOrange;
+
+                for (let a = 0; a < sweep; a += 0.05) {
+                    if (Math.sin(a * 20 + axisX) > 0.0) {
+                        const x1 = arcRadius * Math.cos(currentAngle);
+                        const z1 = arcRadius * Math.sin(currentAngle);
+                        const x2 = arcRadius * Math.cos(currentAngle + 0.05);
+                        const z2 = arcRadius * Math.sin(currentAngle + 0.05);
+
+                        const rx1 = x1 * Math.cos(axisY) + z1 * Math.sin(axisY);
+                        const rz1 = -x1 * Math.sin(axisY) + z1 * Math.cos(axisY);
+                        const ry1 = rx1 * Math.sin(axisX);
+                        
+                        const rx2 = x2 * Math.cos(axisY) + z2 * Math.sin(axisY);
+                        const rz2 = -x2 * Math.sin(axisY) + z2 * Math.cos(axisY);
+                        const ry2 = rx2 * Math.sin(axisX);
+
+                        linePos.push(rx1, ry1, rz1, rx2, ry2, rz2);
+                        lineCol.push(color.r, color.g, color.b, color.r, color.g, color.b);
+
+                        if (Math.random() > 0.7) {
+                            ptPos.push(rx1, ry1, rz1);
+                            ptCol.push(color.r, color.g, color.b);
+                        }
+                    }
+                    currentAngle += 0.05;
+                }
+            }
+
+            const lGeo = new THREE.BufferGeometry();
+            lGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
+            lGeo.setAttribute('color', new THREE.Float32BufferAttribute(lineCol, 3));
+            targetGroup.add(new THREE.LineSegments(lGeo, matLineBright));
+
+            const pGeo = new THREE.BufferGeometry();
+            pGeo.setAttribute('position', new THREE.Float32BufferAttribute(ptPos, 3));
+            pGeo.setAttribute('color', new THREE.Float32BufferAttribute(ptCol, 3));
+            targetGroup.add(new THREE.Points(pGeo, matMedium));
+        }
+
+        // 4. Fractured Outer Dissolve
+        function buildOuterDissolve(radius, count) {
+            const ptPos = [], ptCol = [];
+            for (let i = 0; i < count; i++) {
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+                const n = getNoise(theta, phi, 0, 5);
+                if (n > 0.22) {
+                    const r = radius + (Math.random() * 55 * n);
+                    const x = r * Math.sin(phi) * Math.cos(theta);
+                    const y = r * Math.sin(phi) * Math.sin(theta);
+                    const z = r * Math.cos(phi);
+
+                    ptPos.push(x, y, z);
+                    const fade = Math.max(0, 1 - ((r - radius) / 55)) * 0.75;
+                    ptCol.push(colors.orange.r * fade, colors.orange.g * fade, colors.orange.b * fade);
+                }
+            }
+            const pGeo = new THREE.BufferGeometry();
+            pGeo.setAttribute('position', new THREE.Float32BufferAttribute(ptPos, 3));
+            pGeo.setAttribute('color', new THREE.Float32BufferAttribute(ptCol, 3));
+            outerLayers.add(new THREE.Points(pGeo, matMicro));
+        }
+
+        // 5. Atmospheric Dust
+        function buildAtmosphericDust(count) {
+            const ptPos = [], ptCol = [];
+            for (let i = 0; i < count; i++) {
+                const x = (Math.random() - 0.5) * 800;
+                const y = (Math.random() - 0.5) * 500;
+                const z = (Math.random() - 0.5) * 400;
+                ptPos.push(x, y, z);
+                const alpha = 0.15 + Math.random() * 0.35;
+                ptCol.push(colors.gold.r * alpha, colors.gold.g * alpha, colors.gold.b * alpha);
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(ptPos, 3));
+            geo.setAttribute('color', new THREE.Float32BufferAttribute(ptCol, 3));
+            ambientParticlesGroup.add(new THREE.Points(geo, matMicro));
+        }
+
+        // Build 3D Core
+        buildIntricateCore();
+        buildClusteredDataNetwork(25, 40, 600, innerLayers, true);
+        buildClusteredDataNetwork(40, 60, 400, innerLayers, true);
+        buildShatteredShells(35, 15, innerLayers);
+
+        buildClusteredDataNetwork(70, 80, 500, middleLayers, false);
+        buildClusteredDataNetwork(95, 100, 300, middleLayers, false);
+        buildShatteredShells(80, 25, middleLayers);
+        buildShatteredShells(105, 15, middleLayers);
+
+        buildClusteredDataNetwork(130, 60, 150, outerLayers, false);
+        buildShatteredShells(140, 10, outerLayers);
+        buildOuterDissolve(145, 9000);
+        buildAtmosphericDust(500);
+
+        // --- 2D CINEMATIC HUD & CAPABILITY DEMONSTRATION DRAWING ---
+        function easeOutQuad(x) { return 1 - (1 - x) * (1 - x); }
+        function easeInOutQuad(x) { return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2; }
+
+        function drawHudBrackets(ctx, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+            ctx.strokeStyle = `rgba(255, 170, 0, ${0.45 * alpha})`;
+            ctx.lineWidth = 1.5;
+            ctx.shadowColor = 'rgba(255, 170, 0, 0.4)';
+            ctx.shadowBlur = 6;
+
+            const size = 50;
+            const pad = 40;
+
+            // TL
+            ctx.beginPath();
+            ctx.moveTo(pad, pad + size);
+            ctx.lineTo(pad, pad);
+            ctx.lineTo(pad + size, pad);
+            ctx.stroke();
+
+            // TR
+            ctx.beginPath();
+            ctx.moveTo(WIDTH - pad - size, pad);
+            ctx.lineTo(WIDTH - pad, pad);
+            ctx.lineTo(WIDTH - pad, pad + size);
+            ctx.stroke();
+
+            // BL
+            ctx.beginPath();
+            ctx.moveTo(pad, HEIGHT - pad - size);
+            ctx.lineTo(pad, HEIGHT - pad);
+            ctx.lineTo(pad + size, HEIGHT - pad);
+            ctx.stroke();
+
+            // BR
+            ctx.beginPath();
+            ctx.moveTo(WIDTH - pad - size, HEIGHT - pad);
+            ctx.lineTo(WIDTH - pad, HEIGHT - pad);
+            ctx.lineTo(WIDTH - pad, HEIGHT - pad - size);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        function drawTopHeader(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+            ctx.fillStyle = `rgba(255, 170, 0, ${0.85 * alpha})`;
+            ctx.font = 'bold 14px "Courier New", Courier, monospace';
+            ctx.letterSpacing = '2px';
+            ctx.shadowColor = 'rgba(255, 120, 0, 0.5)';
+            ctx.shadowBlur = 6;
+
+            ctx.fillText('SYS.CORE // ACTIVE [STANDBY]', 55, 68);
+            ctx.font = '12px "Courier New", Courier, monospace';
+            ctx.fillStyle = `rgba(255, 190, 80, ${0.65 * alpha})`;
+            ctx.fillText('PROFILE // JARVIS   ENGINE // PERSONAL AI RUNTIME', 55, 90);
+
+            // Right header
+            ctx.textAlign = 'right';
+            ctx.fillStyle = `rgba(255, 170, 0, ${0.85 * alpha})`;
+            ctx.font = 'bold 14px "Courier New", Courier, monospace';
+            ctx.fillText('MULTIMODAL INTELLIGENCE // READY', WIDTH - 55, 68);
+            ctx.font = '12px "Courier New", Courier, monospace';
+            ctx.fillStyle = `rgba(255, 190, 80, ${0.65 * alpha})`;
+            ctx.fillText('PERCEPTION • REASONING • ACTION', WIDTH - 55, 90);
+
+            // Progress bar
+            const cycle = ((t * 0.2) % 1.0);
+            ctx.fillStyle = `rgba(255, 170, 0, ${0.2 * alpha})`;
+            ctx.fillRect(55, 100, 220, 2);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.85 * alpha})`;
+            ctx.fillRect(55, 100, 220 * Math.min(1.0, cycle * 1.3), 2);
+
+            ctx.restore();
+        }
+
+        function drawBottomStatus(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+            ctx.fillStyle = `rgba(255, 170, 0, ${0.8 * alpha})`;
+            ctx.font = '13px "Courier New", Courier, monospace';
+            ctx.letterSpacing = '2px';
+            ctx.shadowColor = 'rgba(255, 120, 0, 0.5)';
+            ctx.shadowBlur = 6;
+
+            ctx.fillText('[ JARVIS // PERSONAL INTELLIGENCE RUNTIME ]', 55, HEIGHT - 75);
+            ctx.font = '11px "Courier New", Courier, monospace';
+            ctx.fillStyle = `rgba(255, 190, 80, ${0.6 * alpha})`;
+            ctx.fillText('INTERACTION MATRIX // ADAPTIVE CONTINUOUS LEARNING', 55, HEIGHT - 55);
+
+            // Mini VU meter
+            for (let i = 0; i < 9; i++) {
+                const h = 4 + Math.abs(Math.sin(t * 7 + i * 0.8)) * 14;
+                ctx.fillStyle = `rgba(255, 215, 0, ${0.75 * alpha})`;
+                ctx.fillRect(55 + i * 8, HEIGHT - 42 - h, 5, h);
+            }
+
+            // Right bottom status
+            ctx.textAlign = 'right';
+            ctx.fillStyle = `rgba(255, 170, 0, ${0.8 * alpha})`;
+            ctx.font = 'bold 12px "Courier New", Courier, monospace';
+            ctx.fillText('WORKSPACE // 1920x1080 60FPS', WIDTH - 55, HEIGHT - 75);
+            ctx.font = '11px "Courier New", Courier, monospace';
+            ctx.fillStyle = `rgba(104, 211, 145, ${0.85 * alpha})`;
+            ctx.fillText('● ALL SUBSYSTEMS NOMINAL', WIDTH - 55, HEIGHT - 55);
+
+            ctx.restore();
+        }
+
+        function drawPanelBox(ctx, x, y, w, h, alpha, accentColor = 'rgba(255, 215, 0, 0.85)') {
+            ctx.save();
+            ctx.fillStyle = `rgba(12, 7, 2, ${0.86 * alpha})`;
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeStyle = `rgba(255, 170, 0, ${0.35 * alpha})`;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x, y, w, h);
+
+            // Corner accent marks
+            const mark = 6;
+            ctx.fillStyle = accentColor;
+            ctx.fillRect(x, y, mark, 2);
+            ctx.fillRect(x, y, 2, mark);
+            ctx.fillRect(x + w - mark, y, mark, 2);
+            ctx.fillRect(x + w - 2, y, 2, mark);
+            ctx.fillRect(x, y + h - 2, mark, 2);
+            ctx.fillRect(x, y + h - mark, 2, mark);
+            ctx.fillRect(x + w - mark, y + h - 2, mark, 2);
+            ctx.fillRect(x + w - 2, y + h - mark, 2, mark);
+            ctx.restore();
+        }
+
+        // Sleek Cinematic Subtitle / Narration Banner
+        function drawCinematicSubtitle(ctx, mainText, subText, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            const cy = 940; // Clean lower-third position
+            const trayW = 860;
+            const trayH = subText ? 100 : 76;
+            const trayX = (WIDTH - trayW) / 2;
+            const trayY = cy - trayH / 2;
+
+            // Glass Tray
+            ctx.fillStyle = `rgba(10, 6, 2, ${0.85 * alpha})`;
+            ctx.fillRect(trayX, trayY, trayW, trayH);
+            ctx.strokeStyle = `rgba(255, 170, 0, ${0.45 * alpha})`;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(trayX, trayY, trayW, trayH);
+
+            const tk = 6;
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.85 * alpha})`;
+            ctx.fillRect(trayX, trayY, tk, 2);
+            ctx.fillRect(trayX, trayY, 2, tk);
+            ctx.fillRect(trayX + trayW - tk, trayY, tk, 2);
+            ctx.fillRect(trayX + trayW - 2, trayY, 2, tk);
+            ctx.fillRect(trayX, trayY + trayH - 2, tk, 2);
+            ctx.fillRect(trayX, trayY + trayH - tk, 2, tk);
+            ctx.fillRect(trayX + trayW - tk, trayY + trayH - 2, tk, 2);
+            ctx.fillRect(trayX + trayW - 2, trayY + trayH - tk, 2, tk);
+
+            // Ambient glow
+            const grad = ctx.createRadialGradient(WIDTH / 2, cy, 5, WIDTH / 2, cy, 320);
+            grad.addColorStop(0, `rgba(255, 170, 0, ${0.16 * alpha})`);
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(trayX, trayY, trayW, trayH);
+
+            // Text
+            const fontSize = subText ? 38 : 42;
+            ctx.font = `bold ${fontSize}px "Courier New", Courier, monospace`;
+            ctx.shadowColor = 'rgba(255, 170, 0, 0.85)';
+            ctx.shadowBlur = 16 * alpha;
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.98 * alpha})`;
+
+            const textY = subText ? cy - 14 : cy;
+            ctx.fillText(mainText, WIDTH / 2, textY);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.85 * alpha})`;
+            ctx.fillText(mainText, WIDTH / 2, textY);
+
+            if (subText) {
+                ctx.font = `600 17px "Courier New", Courier, monospace`;
+                ctx.shadowColor = 'rgba(255, 100, 0, 0.6)';
+                ctx.shadowBlur = 8 * alpha;
+                ctx.fillStyle = `rgba(255, 190, 80, ${0.88 * alpha})`;
+                ctx.fillText(subText, WIDTH / 2, cy + 24);
+            }
+
+            ctx.restore();
+        }
+
+        // --- SPECIFIC SCENE CAPABILITY DEMONSTRATIONS ---
+
+        // SCENE 2: VOICE (3.2s - 6.2s)
+        function drawSceneVoice(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+
+            // Left: User voice input waveform
+            const wx = 120, wy = 340, ww = 480, wh = 240;
+            drawPanelBox(ctx, wx, wy, ww, wh, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 13px "Courier New", Courier, monospace';
+            ctx.fillText('// USER SPEECH INPUT // AUDIO DETECTED', wx + 20, wy + 32);
+
+            // Oscillating waveform
+            ctx.strokeStyle = `rgba(255, 215, 0, ${0.85 * alpha})`;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            for (let i = 0; i < ww - 40; i++) {
+                const amp = Math.sin((i * 0.05) + t * 12) * Math.cos(i * 0.02) * (30 + Math.sin(t * 8) * 18);
+                const px = wx + 20 + i;
+                const py = wy + 115 + amp;
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+            ctx.font = '16px "Courier New", Courier, monospace';
+            ctx.fillText('"JARVIS, I NEED YOU TODAY."', wx + 20, wy + 195);
+            ctx.fillStyle = `rgba(104, 211, 145, ${0.85 * alpha})`;
+            ctx.font = '11px "Courier New", Courier, monospace';
+            ctx.fillText('STATUS // VOICE CAPTURED [WHISPER NEURAL]', wx + 20, wy + 220);
+
+            // Right: JARVIS Voice Response Envelope
+            const rx = WIDTH - 120 - 480, ry = 340, rw = 480, rh = 240;
+            drawPanelBox(ctx, rx, ry, rw, rh, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 13px "Courier New", Courier, monospace';
+            ctx.fillText('// JARVIS ACTIVE RESPONSE // REAL-TIME', rx + 20, ry + 32);
+
+            // Symmetrical frequency visualizer
+            const barCount = 20;
+            const barW = (rw - 40) / barCount;
+            for (let i = 0; i < barCount; i++) {
+                const barH = 10 + Math.abs(Math.sin(t * 9 + i * 0.7)) * 75;
+                ctx.fillStyle = i % 2 === 0 ? `rgba(255, 215, 0, ${0.85 * alpha})` : `rgba(255, 140, 0, ${0.75 * alpha})`;
+                ctx.fillRect(rx + 20 + i * barW, ry + 165 - barH, barW - 4, barH);
+            }
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+            ctx.font = '16px "Courier New", Courier, monospace';
+            ctx.fillText('"I\'M LISTENING."', rx + 20, ry + 195);
+            ctx.fillStyle = `rgba(255, 190, 80, ${0.85 * alpha})`;
+            ctx.font = '11px "Courier New", Courier, monospace';
+            ctx.fillText('SYNTHESIS // KOKORO HIGH-FIDELITY SPEECH', rx + 20, ry + 220);
+
+            ctx.restore();
+        }
+
+        // SCENE 3: INFORMATION (6.2s - 9.2s)
+        function drawSceneInformation(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+
+            // Center query header
+            const qx = (WIDTH - 760) / 2, qy = 150, qw = 760, qh = 65;
+            drawPanelBox(ctx, qx, qy, qw, qh, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.9 * alpha})`;
+            ctx.font = 'bold 12px "Courier New", Courier, monospace';
+            ctx.fillText('// LIVE RESEARCH INQUIRY', qx + 20, qy + 24);
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+            ctx.font = '14px "Courier New", Courier, monospace';
+            ctx.fillText('"LATEST BRIEFING: GLOBAL MARKETS & CLIMATE DATA"', qx + 20, qy + 48);
+
+            // Left 3 multi-source feeds
+            const feeds = [
+                { title: 'FINANCIAL TICKER', val: 'S&P 500 +1.4% // NASDAQ +2.1% [BULLISH]' },
+                { title: 'METEOROLOGICAL STREAM', val: 'ATLANTIC JET STREAM // 22°C CLEAR SKY' },
+                { title: 'ENERGY INFRASTRUCTURE', val: 'GRID EFFICIENCY // 99.4% OPTIMAL LOAD' }
+            ];
+            feeds.forEach((feed, i) => {
+                const fx = 100, fy = 250 + i * 115, fw = 440, fh = 95;
+                drawPanelBox(ctx, fx, fy, fw, fh, alpha);
+                ctx.fillStyle = `rgba(255, 215, 0, ${0.9 * alpha})`;
+                ctx.font = 'bold 12px "Courier New", Courier, monospace';
+                ctx.fillText(`// LIVE SOURCE 0${i + 1} // ${feed.title}`, fx + 16, fy + 26);
+                ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * alpha})`;
+                ctx.font = '12px "Courier New", Courier, monospace';
+                ctx.fillText(feed.val, fx + 16, fy + 54);
+                ctx.fillStyle = `rgba(104, 211, 145, ${0.85 * alpha})`;
+                ctx.font = '10px "Courier New", Courier, monospace';
+                ctx.fillText('● STREAM VERIFIED // HTTP 200 OK', fx + 16, fy + 76);
+            });
+
+            // Right synthesized answer card
+            const ax = WIDTH - 100 - 540, ay = 280, aw = 540, ah = 280;
+            drawPanelBox(ctx, ax, ay, aw, ah, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 13px "Courier New", Courier, monospace';
+            ctx.fillText('// SYNTHESIZED EXECUTIVE ANSWER', ax + 20, ay + 32);
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+            ctx.font = '15px "Courier New", Courier, monospace';
+            ctx.fillText('"Global equities up 1.4% led by tech', ax + 20, ay + 75);
+            ctx.fillText(' expansion. Regional weather is clear', ax + 20, ay + 105);
+            ctx.fillText(' with 22°C, and all renewable energy', ax + 20, ay + 135);
+            ctx.fillText(' grids are operating at peak margin."', ax + 20, ay + 165);
+
+            ctx.fillStyle = `rgba(104, 211, 145, ${0.85 * alpha})`;
+            ctx.font = '12px "Courier New", Courier, monospace';
+            ctx.fillText('● 38 SOURCES SYNTHESIZED IN 0.32 SECONDS', ax + 20, ay + 215);
+            ctx.fillText('● 100% REASONING GROUNDING VERIFIED', ax + 20, ay + 242);
+
+            ctx.restore();
+        }
+
+        // SCENE 4: MEMORY (9.2s - 12.2s)
+        function drawSceneMemory(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+
+            // Left: Neural Memory Association Graph
+            const mx = 120, my = 260, mw = 520, mh = 380;
+            drawPanelBox(ctx, mx, my, mw, mh, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 13px "Courier New", Courier, monospace';
+            ctx.fillText('// CONTEXTUAL EPISODIC MEMORY // GRAPH RECALL', mx + 20, my + 32);
+
+            // Vector Nodes
+            const nodes = [
+                { x: mx + 90, y: my + 120, label: 'SESSION #412' },
+                { x: mx + 240, y: my + 90, label: 'PROJECT APEX' },
+                { x: mx + 210, y: my + 210, label: 'PREFERENCES' },
+                { x: mx + 380, y: my + 140, label: 'DEADLINE 18:00' },
+                { x: mx + 360, y: my + 270, label: 'DARK UI THEME' }
+            ];
+
+            ctx.strokeStyle = `rgba(255, 170, 0, ${0.6 * alpha})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(nodes[0].x, nodes[0].y); ctx.lineTo(nodes[1].x, nodes[1].y);
+            ctx.lineTo(nodes[3].x, nodes[3].y); ctx.lineTo(nodes[4].x, nodes[4].y);
+            ctx.moveTo(nodes[1].x, nodes[1].y); ctx.lineTo(nodes[2].x, nodes[2].y);
+            ctx.lineTo(nodes[4].x, nodes[4].y);
+            ctx.stroke();
+
+            nodes.forEach((nd, i) => {
+                ctx.fillStyle = i === 1 ? `rgba(255, 255, 255, ${0.95 * alpha})` : `rgba(255, 215, 0, ${0.85 * alpha})`;
+                ctx.beginPath(); ctx.arc(nd.x, nd.y, 6, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = `rgba(255, 190, 80, ${0.85 * alpha})`;
+                ctx.font = '10px "Courier New", Courier, monospace';
+                ctx.fillText(nd.label, nd.x - 25, nd.y - 12);
+            });
+
+            ctx.fillStyle = `rgba(104, 211, 145, ${0.85 * alpha})`;
+            ctx.font = '12px "Courier New", Courier, monospace';
+            ctx.fillText('● EXACT CONTEXT RETRIEVED // 1,420 VECTORS', mx + 20, my + 345);
+
+            // Right: Recalled Context Card
+            const rx = WIDTH - 120 - 480, ry = 300, rw = 480, rh = 280;
+            drawPanelBox(ctx, rx, ry, rw, rh, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 13px "Courier New", Courier, monospace';
+            ctx.fillText('// RECALLED WORKSPACE CONTEXT', rx + 20, ry + 32);
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+            ctx.font = '15px "Courier New", Courier, monospace';
+            ctx.fillText('CURRENT TASK: "PROJECT APEX REPORT"', rx + 20, ry + 80);
+            ctx.fillText('PREFERENCE:   EXECUTIVE BULLETS', rx + 20, ry + 115);
+            ctx.fillText('DEADLINE:     TODAY 18:00 UTC', rx + 20, ry + 150);
+            ctx.fillText('ASSOCIATED:   FINANCE + CODE REPOS', rx + 20, ry + 185);
+
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 14px "Courier New", Courier, monospace';
+            ctx.fillText('"I REMEMBER."', rx + 20, ry + 240);
+
+            ctx.restore();
+        }
+
+        // SCENE 5: COMPUTER ASSISTANCE (12.2s - 15.2s)
+        function drawSceneAssist(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+
+            // 3 App Cards being controlled & orchestrated
+            const apps = [
+                { name: 'TERMINAL.EXE', desc: 'DISPATCHING BUILD AUTOMATION...', status: '0 ERRORS' },
+                { name: 'CODE.EXE [PID 14208]', desc: 'PARSING REPO & ACTIVE WORKSPACE', status: 'INDEXED' },
+                { name: 'FIGMA INTERACTION', desc: 'SYNCING DESIGN TOKENS TO CODE', status: 'SYNCED' }
+            ];
+
+            apps.forEach((app, i) => {
+                const ax = 120 + i * 360, ay = 240, aw = 330, ah = 190;
+                drawPanelBox(ctx, ax, ay, aw, ah, alpha);
+                ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+                ctx.font = 'bold 12px "Courier New", Courier, monospace';
+                ctx.fillText(`// APP HOOK // ${app.name}`, ax + 16, ay + 28);
+
+                ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * alpha})`;
+                ctx.font = '11px "Courier New", Courier, monospace';
+                ctx.fillText(app.desc, ax + 16, ay + 65);
+
+                // Progress bar
+                const fill = Math.min(1.0, 0.4 + ((t - 12.2) / 3.0) * 0.6);
+                ctx.fillStyle = `rgba(255, 170, 0, ${0.15 * alpha})`;
+                ctx.fillRect(ax + 16, ay + 95, aw - 32, 6);
+                ctx.fillStyle = `rgba(255, 215, 0, ${0.85 * alpha})`;
+                ctx.fillRect(ax + 16, ay + 95, (aw - 32) * fill, 6);
+
+                ctx.fillStyle = `rgba(104, 211, 145, ${0.85 * alpha})`;
+                ctx.font = '11px "Courier New", Courier, monospace';
+                ctx.fillText(`● STATUS // ${app.status}`, ax + 16, ay + 140);
+                ctx.fillText('SUBPROCESS CONTROL: ACTIVE', ax + 16, ay + 162);
+            });
+
+            // Master Execution Banner
+            const bx = (WIDTH - 820) / 2, by = 480, bw = 820, bh = 100;
+            drawPanelBox(ctx, bx, by, bw, bh, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 13px "Courier New", Courier, monospace';
+            ctx.fillText('// DESKTOP AUTOMATION DISPATCH', bx + 20, by + 30);
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+            ctx.font = '16px "Courier New", Courier, monospace';
+            ctx.fillText('EXEC // BATCH WORKFLOW: 14 TASKS EXECUTED WITH ZERO ERRORS', bx + 20, by + 65);
+
+            ctx.restore();
+        }
+
+        // SCENE 6: CODING (15.2s - 18.2s)
+        function drawSceneCoding(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+
+            const ix = 140, iy = 200, iw = 960, ih = 440;
+            drawPanelBox(ctx, ix, iy, iw, ih, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 13px "Courier New", Courier, monospace';
+            ctx.fillText('// CODE ENVIRONMENT // JARVIS.PY // AST ANALYSIS', ix + 20, iy + 32);
+
+            const codeLines = [
+                { no: '01', text: 'function optimizeMatrix(stream, buffer) {', alert: false },
+                { no: '02', text: '    const tensor = allocateQuantumTensor(buffer);', alert: false },
+                { no: '03', text: '    if (!stream.isActive()) return tensor; // [!] LEAK DETECTED', alert: true },
+                { no: '04', text: '    return processPipeline(tensor, stream);', alert: false },
+                { no: '05', text: '}', alert: false }
+            ];
+
+            const fixed = t >= 16.5;
+
+            codeLines.forEach((ln, i) => {
+                const py = iy + 85 + i * 45;
+                ctx.fillStyle = `rgba(255, 170, 0, ${0.5 * alpha})`;
+                ctx.font = '14px "Courier New", Courier, monospace';
+                ctx.fillText(ln.no, ix + 25, py);
+
+                if (ln.alert) {
+                    if (fixed) {
+                        ctx.fillStyle = `rgba(104, 211, 145, ${0.95 * alpha})`;
+                        ctx.fillText('    tensor.dispose(); return tensor; // [✓] FIXED // 0 ERRORS', ix + 70, py);
+                    } else {
+                        ctx.fillStyle = `rgba(255, 82, 50, ${0.95 * alpha})`;
+                        ctx.fillText(ln.text, ix + 70, py);
+                        // Scanning laser line
+                        ctx.strokeStyle = `rgba(255, 82, 50, ${0.75 * alpha})`;
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(ix + 65, py - 20, 680, 30);
+                    }
+                } else {
+                    ctx.fillStyle = `rgba(255, 255, 255, ${0.9 * alpha})`;
+                    ctx.fillText(ln.text, ix + 70, py);
+                }
+            });
+
+            // Diagnostic badge
+            const diagY = iy + 340;
+            if (fixed) {
+                ctx.fillStyle = `rgba(104, 211, 145, ${0.95 * alpha})`;
+                ctx.font = 'bold 15px "Courier New", Courier, monospace';
+                ctx.fillText('● ISSUE RESOLVED // "I FOUND IT." // 100% UNIT TESTS PASSED', ix + 25, diagY);
+            } else {
+                ctx.fillStyle = `rgba(255, 82, 50, ${0.95 * alpha})`;
+                ctx.font = 'bold 15px "Courier New", Courier, monospace';
+                ctx.fillText('⚠ ANALYZING AST GRAPH // DETECTING BOUNDARY CONDITION...', ix + 25, diagY);
+            }
+
+            ctx.restore();
+        }
+
+        // SCENE 7: VISION (18.2s - 21.2s)
+        function drawSceneVision(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+
+            // Left: Optical Vision Tracker
+            const vx = 120, vy = 220, vw = 500, vh = 420;
+            drawPanelBox(ctx, vx, vy, vw, vh, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 13px "Courier New", Courier, monospace';
+            ctx.fillText('// OPTICAL VISION MATRIX // CAMERA HOOK', vx + 20, vy + 32);
+
+            // Bounding box with target crosshairs
+            const bx = vx + 140, by = vy + 90, bw = 220, bh = 180;
+            ctx.strokeStyle = `rgba(255, 215, 0, ${0.85 * alpha})`;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(bx, by, bw, bh);
+
+            ctx.beginPath();
+            ctx.moveTo(bx + bw / 2 - 16, by + bh / 2); ctx.lineTo(bx + bw / 2 + 16, by + bh / 2);
+            ctx.moveTo(bx + bw / 2, by + bh / 2 - 16); ctx.lineTo(bx + bw / 2, by + bh / 2 + 16);
+            ctx.stroke();
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.9 * alpha})`;
+            ctx.font = '12px "Courier New", Courier, monospace';
+            ctx.fillText('TARGET: USER [CONF: 99.8%]', bx + 8, by - 10);
+            ctx.fillText('SPATIAL DEPTH: 0.85M // 60FPS', vx + 20, vy + 340);
+            ctx.fillStyle = `rgba(104, 211, 145, ${0.85 * alpha})`;
+            ctx.fillText('● GAZE ATTENTION: LOCKED', vx + 20, vy + 375);
+
+            // Right: Hand Tracking 21-node Skeleton
+            const hx = WIDTH - 120 - 500, hy = 220, hw = 500, hh = 420;
+            drawPanelBox(ctx, hx, hy, hw, hh, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 13px "Courier New", Courier, monospace';
+            ctx.fillText('// 21-NODE SKELETAL HAND TRACKING', hx + 20, hy + 32);
+
+            // Animated Hand
+            const palmX = hx + 250 + Math.sin(t * 3) * 12;
+            const palmY = hy + 220 + Math.cos(t * 3) * 8;
+            const fingerTips = [
+                { x: palmX - 60, y: palmY - 60 },
+                { x: palmX - 25, y: palmY - 95 },
+                { x: palmX + 5, y: palmY - 105 },
+                { x: palmX + 35, y: palmY - 90 },
+                { x: palmX + 65, y: palmY - 55 }
+            ];
+
+            ctx.strokeStyle = `rgba(255, 170, 0, ${0.75 * alpha})`;
+            ctx.lineWidth = 2;
+            fingerTips.forEach(tip => {
+                ctx.beginPath();
+                ctx.moveTo(palmX, palmY);
+                ctx.lineTo((palmX + tip.x) / 2, (palmY + tip.y) / 2);
+                ctx.lineTo(tip.x, tip.y);
+                ctx.stroke();
+
+                ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+                ctx.beginPath(); ctx.arc(tip.x, tip.y, 5, 0, Math.PI * 2); ctx.fill();
+            });
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+            ctx.beginPath(); ctx.arc(palmX, palmY, 7, 0, Math.PI * 2); ctx.fill();
+
+            ctx.fillStyle = `rgba(104, 211, 145, ${0.85 * alpha})`;
+            ctx.font = '12px "Courier New", Courier, monospace';
+            ctx.fillText('● GESTURE // PINCH & ROTATE [INTERACTION ACTIVE]', hx + 20, hy + 375);
+
+            ctx.restore();
+        }
+
+        // SCENE 8: SYSTEM AWARENESS (21.2s - 24.2s)
+        function drawSceneSystem(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+
+            // 4 Panoramic Telemetry Columns
+            const metrics = [
+                { title: 'CPU 8-CORE ARRAY', val: '4.2 GHz // 22% LOAD', bar: 0.22, status: 'OPTIMAL' },
+                { title: 'SYSTEM RAM', val: '14.8 / 32.0 GB [46%]', bar: 0.46, status: 'STABLE' },
+                { title: 'D3D11 GPU ACCEL', val: '41°C // 38% BUS', bar: 0.38, status: 'COOL' },
+                { title: 'NETWORK IO STREAM', val: '1.4 GB/S // 2.1MS', bar: 0.82, status: 'ULTRA-LOW' }
+            ];
+
+            metrics.forEach((m, i) => {
+                const mx = 120 + i * 420, my = 220, mw = 380, mh = 260;
+                drawPanelBox(ctx, mx, my, mw, mh, alpha);
+                ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+                ctx.font = 'bold 12px "Courier New", Courier, monospace';
+                ctx.fillText(`// TELEMETRY // ${m.title}`, mx + 16, my + 30);
+
+                ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+                ctx.font = '15px "Courier New", Courier, monospace';
+                ctx.fillText(m.val, mx + 16, my + 75);
+
+                // Progress Bar
+                ctx.fillStyle = `rgba(255, 170, 0, ${0.15 * alpha})`;
+                ctx.fillRect(mx + 16, my + 105, mw - 32, 6);
+                ctx.fillStyle = `rgba(255, 215, 0, ${0.85 * alpha})`;
+                ctx.fillRect(mx + 16, my + 105, (mw - 32) * m.bar, 6);
+
+                ctx.fillStyle = `rgba(104, 211, 145, ${0.85 * alpha})`;
+                ctx.font = '11px "Courier New", Courier, monospace';
+                ctx.fillText(`● STATUS: ${m.status}`, mx + 16, my + 160);
+                ctx.fillText('DYNAMIC ADAPTIVE TUNING: ON', mx + 16, my + 185);
+            });
+
+            // Master Awareness Banner
+            const bx = (WIDTH - 840) / 2, by = 540, bw = 840, bh = 95;
+            drawPanelBox(ctx, bx, by, bw, bh, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 13px "Courier New", Courier, monospace';
+            ctx.fillText('// HARDWARE AWARENESS & MITIGATION', bx + 20, by + 28);
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+            ctx.font = '15px "Courier New", Courier, monospace';
+            ctx.fillText('THERMAL SPIKE IN CORE 4 MITIGATED // FAN CURVE SMOOTHED // 0 INTERRUPTIONS', bx + 20, by + 62);
+
+            ctx.restore();
+        }
+
+        // SCENE 9: CREATION (24.2s - 27.2s)
+        function drawSceneCreation(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+
+            // Pipeline: IDEA -> TEXT -> CODE -> VISUAL
+            const steps = [
+                { label: '01 // IDEA', desc: '"Volumetric Quantum Visualizer"' },
+                { label: '02 // TEXT', desc: 'Synthesizing Mathematical Spec' },
+                { label: '03 // CODE', desc: 'Compiling WebGL Shader Pipeline' },
+                { label: '04 // OUTPUT', desc: 'Real-Time 3D Hologram Deployed' }
+            ];
+
+            steps.forEach((st, i) => {
+                const sx = 100 + i * 430, sy = 220, sw = 390, sh = 170;
+                const isCurrent = (t - 24.2) >= i * 0.7;
+                drawPanelBox(ctx, sx, sy, sw, sh, isCurrent ? alpha : alpha * 0.4);
+
+                ctx.fillStyle = isCurrent ? `rgba(255, 215, 0, ${0.95 * alpha})` : `rgba(255, 170, 0, ${0.5 * alpha})`;
+                ctx.font = 'bold 13px "Courier New", Courier, monospace';
+                ctx.fillText(st.label, sx + 16, sy + 30);
+
+                ctx.fillStyle = isCurrent ? `rgba(255, 255, 255, ${0.95 * alpha})` : `rgba(255, 255, 255, ${0.4 * alpha})`;
+                ctx.font = '12px "Courier New", Courier, monospace';
+                ctx.fillText(st.desc, sx + 16, sy + 75);
+
+                if (isCurrent) {
+                    ctx.fillStyle = `rgba(104, 211, 145, ${0.9 * alpha})`;
+                    ctx.font = '11px "Courier New", Courier, monospace';
+                    ctx.fillText('● PIPELINE STAGE COMPLETE', sx + 16, sy + 130);
+                }
+            });
+
+            // Holographic Blueprint Frame
+            const bx = (WIDTH - 640) / 2, by = 440, bw = 640, bh = 190;
+            drawPanelBox(ctx, bx, by, bw, bh, alpha);
+            ctx.fillStyle = `rgba(255, 215, 0, ${0.95 * alpha})`;
+            ctx.font = 'bold 14px "Courier New", Courier, monospace';
+            ctx.fillText('// VOLUMETRIC CREATION ENGINE // 100% OPERATIONAL', bx + 20, by + 35);
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+            ctx.font = '18px "Courier New", Courier, monospace';
+            ctx.fillText('"LET\'S BUILD IT."', bx + 20, by + 90);
+            ctx.fillStyle = `rgba(104, 211, 145, ${0.85 * alpha})`;
+            ctx.font = '12px "Courier New", Courier, monospace';
+            ctx.fillText('● ASSETS GENERATED & EMBEDDED DIRECTLY INTO SYSTEM RUNTIME', bx + 20, by + 140);
+
+            ctx.restore();
+        }
+
+        // SCENE 10: MULTIMODAL INTELLIGENCE (27.2s - 29.5s)
+        function drawSceneMultimodal(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+
+            // Orbiting Capability Tags
+            const caps = ['VOICE', 'VISION', 'MEMORY', 'RESEARCH', 'CONTROL', 'CODE', 'SYSTEM'];
+            const cx = WIDTH / 2, cy = HEIGHT / 2;
+            const orbitR = 340;
+
+            caps.forEach((cap, i) => {
+                const angle = (i / caps.length) * Math.PI * 2 + t * 0.9;
+                const ox = cx + Math.cos(angle) * (orbitR + 80);
+                const oy = cy + Math.sin(angle) * (orbitR * 0.5);
+
+                ctx.fillStyle = `rgba(12, 7, 2, ${0.85 * alpha})`;
+                ctx.fillRect(ox - 65, oy - 20, 130, 40);
+                ctx.strokeStyle = `rgba(255, 215, 0, ${0.75 * alpha})`;
+                ctx.strokeRect(ox - 65, oy - 20, 130, 40);
+
+                ctx.textAlign = 'center';
+                ctx.fillStyle = `rgba(255, 255, 255, ${0.95 * alpha})`;
+                ctx.font = 'bold 12px "Courier New", Courier, monospace';
+                ctx.fillText(cap, ox, oy + 5);
+            });
+
+            ctx.restore();
+        }
+
+        // SCENE 11: FUTURE INTERFACE [CONCEPT] (29.5s - 31.5s)
+        function drawSceneFuture(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+
+            // Future BCI Ethereal Aura
+            const cx = WIDTH / 2, cy = HEIGHT / 2;
+            
+            // Synaptic Connections
+            const synCount = 12;
+            for (let i = 0; i < synCount; i++) {
+                const a = (i / synCount) * Math.PI * 2 + t * 0.4;
+                const r1 = 120, r2 = 380;
+                const x1 = cx + Math.cos(a) * r1;
+                const y1 = cy + Math.sin(a) * r1;
+                const x2 = cx + Math.cos(a + 0.3) * r2;
+                const y2 = cy + Math.sin(a + 0.3) * r2;
+
+                ctx.strokeStyle = `rgba(0, 229, 255, ${0.5 * alpha})`;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+
+                ctx.fillStyle = `rgba(0, 229, 255, ${0.85 * alpha})`;
+                ctx.beginPath(); ctx.arc(x2, y2, 4, 0, Math.PI * 2); ctx.fill();
+            }
+
+            // Bold Honesty Framing
+            const bx = (WIDTH - 760) / 2, by = 160, bw = 760, bh = 110;
+            drawPanelBox(ctx, bx, by, bw, bh, alpha, 'rgba(0, 229, 255, 0.9)');
+            ctx.fillStyle = `rgba(0, 229, 255, ${0.95 * alpha})`;
+            ctx.font = 'bold 18px "Courier New", Courier, monospace';
+            ctx.fillText('THE NEXT INTERFACE // CONCEPT', bx + 24, by + 40);
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * alpha})`;
+            ctx.font = '13px "Courier New", Courier, monospace';
+            ctx.fillText('WHERE HUMAN INTENTION MEETS INSTANT ARTIFICIAL COGNITION', bx + 24, by + 72);
+            ctx.fillStyle = `rgba(255, 190, 80, ${0.8 * alpha})`;
+            ctx.font = '11px "Courier New", Courier, monospace';
+            ctx.fillText('● FUTURE RESEARCH DIRECTION // BRAIN-COMPUTER INTERFACE PROTOYPE', bx + 24, by + 94);
+
+            ctx.restore();
+        }
+
+        // FINAL SCENE: THE REVEAL & SHOCKWAVE PULSE (31.5s - 34.0s)
+        function drawFinalPulse(ctx, t, alpha) {
+            if (alpha <= 0) return;
+            ctx.save();
+            const cx = WIDTH / 2, cy = HEIGHT / 2;
+
+            // Final Shockwave Energy Ring (t: 32.4s -> 33.3s)
+            if (t >= 32.4 && t <= 33.5) {
+                const pulseT = (t - 32.4) / 1.1;
+                const r = pulseT * 1100;
+                const pAlpha = (1.0 - pulseT);
+
+                ctx.save();
+                ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 255, 255, ${0.95 * pAlpha})`;
+                ctx.lineWidth = 4 * pAlpha;
+                ctx.shadowColor = 'rgba(255, 215, 0, 0.9)';
+                ctx.shadowBlur = 35 * pAlpha;
+                ctx.stroke();
+
+                ctx.beginPath(); ctx.arc(cx, cy, r * 0.9, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 170, 0, ${0.85 * pAlpha})`;
+                ctx.lineWidth = 8 * pAlpha;
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Final Fade to Black (33.4s - 34.0s)
+            if (t >= 33.4) {
+                const fadeT = Math.min(1.0, (t - 33.4) / 0.6);
+                ctx.fillStyle = `rgba(2, 1, 0, ${fadeT})`;
+                ctx.fillRect(0, 0, WIDTH, HEIGHT);
+            }
+
+            ctx.restore();
+        }
+
+        // --- MASTER FRAME RENDERER AT EXACT TIME T ---
+        function renderShowcaseFrame(t) {
+            t = Math.max(0, Math.min(DURATION, t));
+
+            // Dynamic Camera Trajectory & Core Speed
+            let camX = 0, camY = 0, camZ = 280;
+            let coreSpeed = 1.0;
+            let bloomStrength = 1.45;
+            let coreScale = 1.0;
+
+            if (t < 3.2) {
+                // Scene 1: Wake
+                const p = t / 3.2;
+                camZ = 230 + p * 60;
+                coreSpeed = 0.8 + p * 0.6;
+                coreScale = 1.0 + Math.sin(t * 2.2) * 0.02;
+                bloomStrength = 1.35 + p * 0.3;
+            } else if (t < 6.2) {
+                // Scene 2: Voice
+                camX = -35; camZ = 270;
+                coreSpeed = 1.8;
+                coreScale = 1.05 + Math.abs(Math.sin(t * 8.0)) * 0.14;
+                bloomStrength = 1.6;
+            } else if (t < 9.2) {
+                // Scene 3: Information
+                camX = 40; camY = 15; camZ = 280;
+                coreSpeed = 2.0;
+                bloomStrength = 1.5;
+            } else if (t < 12.2) {
+                // Scene 4: Memory
+                camX = -45; camY = -10; camZ = 280;
+                coreSpeed = 1.6;
+                bloomStrength = 1.5;
+            } else if (t < 15.2) {
+                // Scene 5: Computer Assistance
+                camX = 0; camY = 0; camZ = 295;
+                coreSpeed = 2.2;
+                bloomStrength = 1.55;
+            } else if (t < 18.2) {
+                // Scene 6: Coding
+                camX = 50; camY = 10; camZ = 260;
+                coreSpeed = 1.9;
+                bloomStrength = 1.5;
+            } else if (t < 21.2) {
+                // Scene 7: Vision
+                camX = -45; camY = 15; camZ = 265;
+                coreSpeed = 1.8;
+                bloomStrength = 1.5;
+            } else if (t < 24.2) {
+                // Scene 8: System Awareness
+                camX = 0; camY = 25; camZ = 300;
+                coreSpeed = 1.6;
+                bloomStrength = 1.45;
+            } else if (t < 27.2) {
+                // Scene 9: Creation
+                camX = 30; camY = -15; camZ = 270;
+                coreSpeed = 2.6;
+                bloomStrength = 1.7;
+            } else if (t < 29.5) {
+                // Scene 10: Multimodal Convergence
+                const orbitA = (t - 27.2) * 1.5;
+                camX = Math.sin(orbitA) * 35;
+                camZ = 290;
+                coreSpeed = 3.0;
+                bloomStrength = 1.8;
+            } else if (t < 31.5) {
+                // Scene 11: Future BCI Concept
+                camX = 0; camY = 10; camZ = 295;
+                coreSpeed = 1.4;
+                bloomStrength = 1.5;
+            } else {
+                // Final Scene: Grand reveal pull-back & pulse
+                if (t >= 32.4 && t <= 33.2) {
+                    const pP = (t - 32.4) / 0.8;
+                    coreScale = 1.35 * (1.0 - pP * 0.28);
+                    bloomStrength = 2.8 * (1.0 - pP * 0.55);
+                } else {
+                    coreScale = 1.0;
+                    bloomStrength = 1.3;
+                }
+                const pullP = Math.min(1.0, (t - 31.5) / 2.0);
+                camZ = 280 + pullP * 80;
+                coreSpeed = 0.5;
+            }
+
+            camera.position.set(camX, camY, camZ);
+            camera.lookAt(0, 0, 0);
+
+            // Core rotations
+            jarvisCore.rotation.y = t * 0.42 * coreSpeed;
+            jarvisCore.rotation.x = Math.sin(t * 2.0) * 0.025;
+            jarvisCore.scale.setScalar(coreScale);
+
+            innerLayers.rotation.y = t * 0.16 * coreSpeed;
+            innerLayers.rotation.z = t * 0.07 * coreSpeed;
+            innerLayers.scale.setScalar(coreScale * 1.02);
+
+            middleLayers.rotation.y = -t * 0.075 * coreSpeed;
+            middleLayers.scale.setScalar(coreScale * 0.98);
+
+            outerLayers.rotation.y = t * 0.022;
+            ambientParticlesGroup.rotation.y = t * 0.012;
+
+            bloomPass.strength = bloomStrength;
+
+            // Render WebGL Three.js Composer
+            composer.render();
+
+            // 2. Composite onto 2D Canvas
+            ctx.clearRect(0, 0, WIDTH, HEIGHT);
+            ctx.drawImage(webglCanvas, 0, 0);
+
+            // 3. Render Overlays & Capabilities by Scene
+            const baseAlpha = t < 1.0 ? t / 1.0 : (t > 33.4 ? Math.max(0, 1.0 - (t - 33.4) / 0.6) : 1.0);
+            drawHudBrackets(ctx, baseAlpha);
+            drawTopHeader(ctx, t, baseAlpha);
+            drawBottomStatus(ctx, t, baseAlpha);
+
+            // SCENE 1: WAKE (0.0s - 3.2s)
+            if (t >= 0.2 && t < 3.2) {
+                let alpha = 1.0;
+                if (t < 1.0) alpha = (t - 0.2) / 0.8;
+                else if (t > 2.4) alpha = Math.max(0, 1.0 - (t - 2.4) / 0.8);
+                drawCinematicSubtitle(ctx, "JARVIS", "PERSONAL AI SYSTEM", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 1 // WAKE";
+            }
+
+            // SCENE 2: VOICE (3.2s - 6.2s)
+            else if (t >= 3.2 && t < 6.2) {
+                let alpha = 1.0;
+                if (t < 3.8) alpha = (t - 3.2) / 0.6;
+                else if (t > 5.6) alpha = Math.max(0, 1.0 - (t - 5.6) / 0.6);
+                drawSceneVoice(ctx, t, alpha);
+                drawCinematicSubtitle(ctx, "VOICE INTERACTION", "NATURAL BIDIRECTIONAL CONVERSATION", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 2 // VOICE";
+            }
+
+            // SCENE 3: INFORMATION (6.2s - 9.2s)
+            else if (t >= 6.2 && t < 9.2) {
+                let alpha = 1.0;
+                if (t < 6.8) alpha = (t - 6.2) / 0.6;
+                else if (t > 8.6) alpha = Math.max(0, 1.0 - (t - 8.6) / 0.6);
+                drawSceneInformation(ctx, t, alpha);
+                drawCinematicSubtitle(ctx, "LIVE INFORMATION SYNTHESIS", "REAL-TIME RESEARCH & GROUNDED REASONING", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 3 // INFORMATION";
+            }
+
+            // SCENE 4: MEMORY (9.2s - 12.2s)
+            else if (t >= 9.2 && t < 12.2) {
+                let alpha = 1.0;
+                if (t < 9.8) alpha = (t - 9.2) / 0.6;
+                else if (t > 11.6) alpha = Math.max(0, 1.0 - (t - 11.6) / 0.6);
+                drawSceneMemory(ctx, t, alpha);
+                drawCinematicSubtitle(ctx, "CONTEXTUAL EPISODIC MEMORY", "CONTINUOUS PERSISTENCE ACROSS SESSIONS", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 4 // MEMORY";
+            }
+
+            // SCENE 5: COMPUTER ASSISTANCE (12.2s - 15.2s)
+            else if (t >= 12.2 && t < 15.2) {
+                let alpha = 1.0;
+                if (t < 12.8) alpha = (t - 12.2) / 0.6;
+                else if (t > 14.6) alpha = Math.max(0, 1.0 - (t - 14.6) / 0.6);
+                drawSceneAssist(ctx, t, alpha);
+                drawCinematicSubtitle(ctx, "FULL COMPUTER CONTROL", "AUTOMATING APPLICATIONS & WORKFLOWS", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 5 // COMPUTER CONTROL";
+            }
+
+            // SCENE 6: CODING (15.2s - 18.2s)
+            else if (t >= 15.2 && t < 18.2) {
+                let alpha = 1.0;
+                if (t < 15.8) alpha = (t - 15.2) / 0.6;
+                else if (t > 17.6) alpha = Math.max(0, 1.0 - (t - 17.6) / 0.6);
+                drawSceneCoding(ctx, t, alpha);
+                drawCinematicSubtitle(ctx, "INTELLIGENT CODE ANALYSIS", "AST INSPECTION & INSTANT REMEDIATION", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 6 // CODING";
+            }
+
+            // SCENE 7: VISION (18.2s - 21.2s)
+            else if (t >= 18.2 && t < 21.2) {
+                let alpha = 1.0;
+                if (t < 18.8) alpha = (t - 18.2) / 0.6;
+                else if (t > 20.6) alpha = Math.max(0, 1.0 - (t - 20.6) / 0.6);
+                drawSceneVision(ctx, t, alpha);
+                drawCinematicSubtitle(ctx, "COMPUTER VISION & GESTURE", "OPTICAL TRACKING & 21-NODE SKELETAL INTERACTION", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 7 // VISION";
+            }
+
+            // SCENE 8: SYSTEM AWARENESS (21.2s - 24.2s)
+            else if (t >= 21.2 && t < 24.2) {
+                let alpha = 1.0;
+                if (t < 21.8) alpha = (t - 21.2) / 0.6;
+                else if (t > 23.6) alpha = Math.max(0, 1.0 - (t - 23.6) / 0.6);
+                drawSceneSystem(ctx, t, alpha);
+                drawCinematicSubtitle(ctx, "HARDWARE SYSTEM AWARENESS", "REAL-TIME MONITORING & THERMAL RESILIENCE", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 8 // HARDWARE";
+            }
+
+            // SCENE 9: CREATION (24.2s - 27.2s)
+            else if (t >= 24.2 && t < 27.2) {
+                let alpha = 1.0;
+                if (t < 24.8) alpha = (t - 24.2) / 0.6;
+                else if (t > 26.6) alpha = Math.max(0, 1.0 - (t - 26.6) / 0.6);
+                drawSceneCreation(ctx, t, alpha);
+                drawCinematicSubtitle(ctx, "RAPID MULTIMODAL CREATION", "IDEA ➔ SPEC ➔ CODE ➔ 3D ASSET", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 9 // CREATION";
+            }
+
+            // SCENE 10: MULTIMODAL CONVERGENCE (27.2s - 29.5s)
+            else if (t >= 27.2 && t < 29.5) {
+                let alpha = 1.0;
+                if (t < 27.8) alpha = (t - 27.2) / 0.6;
+                else if (t > 29.0) alpha = Math.max(0, 1.0 - (t - 29.0) / 0.5);
+                drawSceneMultimodal(ctx, t, alpha);
+                drawCinematicSubtitle(ctx, "UNIFIED MULTIMODAL INTELLIGENCE", "ONE SEAMLESS PERSONAL AI COMPANION", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 10 // CONVERGENCE";
+            }
+
+            // SCENE 11: FUTURE BCI CONCEPT (29.5s - 31.5s)
+            else if (t >= 29.5 && t < 31.5) {
+                let alpha = 1.0;
+                if (t < 30.0) alpha = (t - 29.5) / 0.5;
+                else if (t > 31.0) alpha = Math.max(0, 1.0 - (t - 31.0) / 0.5);
+                drawSceneFuture(ctx, t, alpha);
+                drawCinematicSubtitle(ctx, "THE NEXT INTERFACE", "CONCEPT // FUTURE DIRECTION", alpha);
+                if (sceneBadge) sceneBadge.textContent = "SCENE 11 // FUTURE CONCEPT";
+            }
+
+            // FINAL SCENE: THE REVEAL & SHOCKWAVE PULSE (31.5s - 34.0s)
+            else if (t >= 31.5) {
+                let alpha = 1.0;
+                if (t < 32.0) alpha = (t - 31.5) / 0.5;
+                else if (t > 33.5) alpha = Math.max(0, 1.0 - (t - 33.5) / 0.5);
+
+                drawFinalPulse(ctx, t, alpha);
+
+                if (t >= 31.6 && t < 33.6) {
+                    const subPrompt = t >= 32.2 ? "BUILT TO THINK. BUILT TO ASSIST." : "HOW CAN I HELP?";
+                    drawCinematicSubtitle(ctx, "JARVIS", subPrompt, alpha);
+                }
+                if (sceneBadge) sceneBadge.textContent = "FINAL SCENE // REVEAL";
+            }
+        }
+
+        // --- PLAYBACK & INTERACTIVE CONTROLS ---
+        function animateLoop(now) {
+            if (isPlaying && !isRecordingMode) {
+                const dt = (now - lastFrameTimestamp) / 1000;
+                currentTime += dt;
+                if (currentTime > DURATION) {
+                    currentTime = 0; // loop
+                }
+                timeSlider.value = currentTime;
+                timeDisplay.textContent = `${currentTime.toFixed(2)}s`;
+                renderShowcaseFrame(currentTime);
+            }
+            lastFrameTimestamp = now;
+            requestAnimationFrame(animateLoop);
+        }
+
+        btnPlay.addEventListener('click', () => {
+            isPlaying = !isPlaying;
+            btnPlay.textContent = isPlaying ? 'PAUSE' : 'PLAY';
+            if (isPlaying) lastFrameTimestamp = performance.now();
+        });
+
+        btnRestart.addEventListener('click', () => {
+            currentTime = 0;
+            timeSlider.value = 0;
+            isPlaying = true;
+            btnPlay.textContent = 'PAUSE';
+            lastFrameTimestamp = performance.now();
+            renderShowcaseFrame(0);
+        });
+
+        timeSlider.addEventListener('input', (e) => {
+            currentTime = parseFloat(e.target.value);
+            timeDisplay.textContent = `${currentTime.toFixed(2)}s`;
+            renderShowcaseFrame(currentTime);
+        });
+
+        // Initialize First Frame and start playback loop
+        renderShowcaseFrame(0);
+        requestAnimationFrame(animateLoop);
+
+        // --- HEADLESS RECORDING ENGINE ---
+        if (isRecordingMode) {
+            window.startHeadlessExport = async function() {
+                console.log(`Starting headless 16:9 export: ${TOTAL_FRAMES} frames...`);
+                for (let f = 0; f < TOTAL_FRAMES; f++) {
+                    const t = f / FPS;
+                    renderShowcaseFrame(t);
+                    const blob = await new Promise(resolve => renderCanvas.toBlob(resolve, 'image/jpeg', 0.94));
+                    await fetch(`/frame?index=${f}`, { method: 'POST', body: blob });
+                    if (f % 60 === 0) {
+                        console.log(`Exported frame ${f} / ${TOTAL_FRAMES} (${(t).toFixed(1)}s)`);
+                    }
+                }
+                await fetch('/done', { method: 'POST' });
+                console.log("Headless 16:9 export completed!");
+            };
+
+            setTimeout(window.startHeadlessExport, 800);
+        }
+    </script>
+</body>
+</html>
