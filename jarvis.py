@@ -1320,15 +1320,15 @@ def route(text, intents):
     ):
         return "realtime"
 
-    # Simple local time/date if requested plainly
-    if text in ["time", "what time is it", "tell me the time", "current time"]:
+    # Intent-based routing for basic capabilities
+    if "greet" in intents:
         return "local"
-    if text in ["date", "what is the date", "what's the date", "today's date", "today"]:
+    if "time" in intents or "date" in intents:
         return "local"
 
     # Casual chat: only local if no Gemini API key is configured
     if not GEMINI_API_KEY:
-        if is_acknowledgment(text) or is_casual_chat(text) or "greet" in intents:
+        if is_acknowledgment(text) or is_casual_chat(text):
             return "local"
 
     # Default to Gemini AI for all topics, explanations, questions, and inquiries
@@ -2159,6 +2159,7 @@ def get_intent(text):
     words = text.split()
 
     for word in words:
+        word = word.strip("?!.,;")
         for intent, keywords in word_map.items():
             if any(word == k for k in keywords):
                 if intent not in intents:

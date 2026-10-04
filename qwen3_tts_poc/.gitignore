@@ -1,6 +1,0 @@
-.python/
-.venv/
-.uv-cache/
-models/
-reference.wav
-generated_test.wav

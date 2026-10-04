@@ -12,4 +12,13 @@ gemini_usage.json
 brain_verification.png
 brain_verified_render.png
 
+# Virtual environments & package caches
+**/.venv/
+**/.venv*/
+**/.uv-cache/
+**/hf_home/
+**/__pycache__/
 
+# Voice evaluation output audio and logs
+voice_eval/**/out/
+voice_eval/**/*.log

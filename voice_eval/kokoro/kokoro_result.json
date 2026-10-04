@@ -1,0 +1,671 @@
+{
+  "engine": "Kokoro-82M",
+  "device": "cpu",
+  "streaming_supported": true,
+  "voices": {
+    "af_heart": {
+      "short": {
+        "text": "Good evening, sir.",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 3.52,
+            "total_s": 3.52,
+            "audio_s": 1.7,
+            "rtf": 2.071,
+            "peak_rss_gib": 1.98,
+            "cpu_avg_pct_of_one_core": 206.5,
+            "cpu_peak_pct_of_one_core": 615.0,
+            "cpu_avg_pct_of_machine": 12.9,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 0.939,
+            "total_s": 0.939,
+            "audio_s": 1.7,
+            "rtf": 0.552,
+            "peak_rss_gib": 1.719,
+            "cpu_avg_pct_of_one_core": 578.6,
+            "cpu_peak_pct_of_one_core": 748.0,
+            "cpu_avg_pct_of_machine": 36.2,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 0.963,
+            "total_s": 0.963,
+            "audio_s": 1.7,
+            "rtf": 0.566,
+            "peak_rss_gib": 1.723,
+            "cpu_avg_pct_of_one_core": 538.9,
+            "cpu_peak_pct_of_one_core": 764.6,
+            "cpu_avg_pct_of_machine": 33.7,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 1.7,
+          "sample_rate": 24000,
+          "rms": 0.0473,
+          "peak": 0.308,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.494,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\af_heart_short.wav"
+      },
+      "primary": {
+        "text": "Hello. This is a short local voice cloning test.",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 1.813,
+            "total_s": 1.814,
+            "audio_s": 3.45,
+            "rtf": 0.526,
+            "peak_rss_gib": 1.754,
+            "cpu_avg_pct_of_one_core": 565.4,
+            "cpu_peak_pct_of_one_core": 764.6,
+            "cpu_avg_pct_of_machine": 35.3,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 1.808,
+            "total_s": 1.808,
+            "audio_s": 3.45,
+            "rtf": 0.524,
+            "peak_rss_gib": 1.76,
+            "cpu_avg_pct_of_one_core": 582.5,
+            "cpu_peak_pct_of_one_core": 764.6,
+            "cpu_avg_pct_of_machine": 36.4,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 1.764,
+            "total_s": 1.764,
+            "audio_s": 3.45,
+            "rtf": 0.511,
+            "peak_rss_gib": 1.767,
+            "cpu_avg_pct_of_one_core": 577.8,
+            "cpu_peak_pct_of_one_core": 814.5,
+            "cpu_avg_pct_of_machine": 36.1,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 3.45,
+          "sample_rate": 24000,
+          "rms": 0.0461,
+          "peak": 0.316,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.308,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\af_heart_primary.wav"
+      },
+      "medium": {
+        "text": "All systems are online. I have finished indexing your project and found three files that need attention.",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 3.318,
+            "total_s": 3.318,
+            "audio_s": 6.78,
+            "rtf": 0.49,
+            "peak_rss_gib": 1.826,
+            "cpu_avg_pct_of_one_core": 593.4,
+            "cpu_peak_pct_of_one_core": 781.2,
+            "cpu_avg_pct_of_machine": 37.1,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 3.164,
+            "total_s": 3.164,
+            "audio_s": 6.78,
+            "rtf": 0.467,
+            "peak_rss_gib": 1.823,
+            "cpu_avg_pct_of_one_core": 603.1,
+            "cpu_peak_pct_of_one_core": 731.1,
+            "cpu_avg_pct_of_machine": 37.7,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 3.154,
+            "total_s": 3.154,
+            "audio_s": 6.78,
+            "rtf": 0.466,
+            "peak_rss_gib": 1.826,
+            "cpu_avg_pct_of_one_core": 628.3,
+            "cpu_peak_pct_of_one_core": 774.1,
+            "cpu_avg_pct_of_machine": 39.3,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 6.775,
+          "sample_rate": 24000,
+          "rms": 0.0499,
+          "peak": 0.435,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.293,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\af_heart_medium.wav"
+      },
+      "long": {
+        "text": "I have reviewed the schedule for today. You have a meeting at ten, a code review at noon, and a reminder to call your family this evening. Shall I prepare a summary of each?",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 4.994,
+            "total_s": 4.994,
+            "audio_s": 10.45,
+            "rtf": 0.478,
+            "peak_rss_gib": 1.903,
+            "cpu_avg_pct_of_one_core": 594.4,
+            "cpu_peak_pct_of_one_core": 781.2,
+            "cpu_avg_pct_of_machine": 37.1,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 4.969,
+            "total_s": 4.969,
+            "audio_s": 10.45,
+            "rtf": 0.475,
+            "peak_rss_gib": 1.903,
+            "cpu_avg_pct_of_one_core": 622.0,
+            "cpu_peak_pct_of_one_core": 764.6,
+            "cpu_avg_pct_of_machine": 38.9,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 4.983,
+            "total_s": 4.983,
+            "audio_s": 10.45,
+            "rtf": 0.477,
+            "peak_rss_gib": 1.938,
+            "cpu_avg_pct_of_one_core": 624.9,
+            "cpu_peak_pct_of_one_core": 767.0,
+            "cpu_avg_pct_of_machine": 39.1,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 10.45,
+          "sample_rate": 24000,
+          "rms": 0.052,
+          "peak": 0.428,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.266,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\af_heart_long.wav"
+      }
+    },
+    "bm_george": {
+      "short": {
+        "text": "Good evening, sir.",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 3.833,
+            "total_s": 3.833,
+            "audio_s": 2.0,
+            "rtf": 1.917,
+            "peak_rss_gib": 1.943,
+            "cpu_avg_pct_of_one_core": 194.8,
+            "cpu_peak_pct_of_one_core": 698.1,
+            "cpu_avg_pct_of_machine": 12.2,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 1.141,
+            "total_s": 1.141,
+            "audio_s": 2.0,
+            "rtf": 0.571,
+            "peak_rss_gib": 1.761,
+            "cpu_avg_pct_of_one_core": 553.1,
+            "cpu_peak_pct_of_one_core": 759.7,
+            "cpu_avg_pct_of_machine": 34.6,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 1.082,
+            "total_s": 1.082,
+            "audio_s": 2.0,
+            "rtf": 0.541,
+            "peak_rss_gib": 1.758,
+            "cpu_avg_pct_of_one_core": 522.3,
+            "cpu_peak_pct_of_one_core": 764.6,
+            "cpu_avg_pct_of_machine": 32.6,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 2.0,
+          "sample_rate": 24000,
+          "rms": 0.0582,
+          "peak": 0.332,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.39,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\bm_george_short.wav"
+      },
+      "primary": {
+        "text": "Hello. This is a short local voice cloning test.",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 2.053,
+            "total_s": 2.053,
+            "audio_s": 3.9,
+            "rtf": 0.527,
+            "peak_rss_gib": 1.791,
+            "cpu_avg_pct_of_one_core": 597.9,
+            "cpu_peak_pct_of_one_core": 759.7,
+            "cpu_avg_pct_of_machine": 37.4,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 1.999,
+            "total_s": 1.999,
+            "audio_s": 3.9,
+            "rtf": 0.513,
+            "peak_rss_gib": 1.799,
+            "cpu_avg_pct_of_one_core": 592.9,
+            "cpu_peak_pct_of_one_core": 781.2,
+            "cpu_avg_pct_of_machine": 37.1,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 1.994,
+            "total_s": 1.994,
+            "audio_s": 3.9,
+            "rtf": 0.511,
+            "peak_rss_gib": 1.782,
+            "cpu_avg_pct_of_one_core": 622.4,
+            "cpu_peak_pct_of_one_core": 976.6,
+            "cpu_avg_pct_of_machine": 38.9,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 3.9,
+          "sample_rate": 24000,
+          "rms": 0.0588,
+          "peak": 0.299,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.323,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\bm_george_primary.wav"
+      },
+      "medium": {
+        "text": "All systems are online. I have finished indexing your project and found three files that need attention.",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 3.587,
+            "total_s": 3.587,
+            "audio_s": 7.33,
+            "rtf": 0.49,
+            "peak_rss_gib": 1.863,
+            "cpu_avg_pct_of_one_core": 621.1,
+            "cpu_peak_pct_of_one_core": 764.6,
+            "cpu_avg_pct_of_machine": 38.8,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 3.597,
+            "total_s": 3.597,
+            "audio_s": 7.33,
+            "rtf": 0.491,
+            "peak_rss_gib": 1.874,
+            "cpu_avg_pct_of_one_core": 605.8,
+            "cpu_peak_pct_of_one_core": 759.7,
+            "cpu_avg_pct_of_machine": 37.9,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 3.535,
+            "total_s": 3.535,
+            "audio_s": 7.33,
+            "rtf": 0.483,
+            "peak_rss_gib": 1.897,
+            "cpu_avg_pct_of_one_core": 637.2,
+            "cpu_peak_pct_of_one_core": 781.2,
+            "cpu_avg_pct_of_machine": 39.8,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 7.325,
+          "sample_rate": 24000,
+          "rms": 0.0589,
+          "peak": 0.382,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.279,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\bm_george_medium.wav"
+      },
+      "long": {
+        "text": "I have reviewed the schedule for today. You have a meeting at ten, a code review at noon, and a reminder to call your family this evening. Shall I prepare a summary of each?",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 5.607,
+            "total_s": 5.607,
+            "audio_s": 11.1,
+            "rtf": 0.505,
+            "peak_rss_gib": 1.947,
+            "cpu_avg_pct_of_one_core": 607.5,
+            "cpu_peak_pct_of_one_core": 788.4,
+            "cpu_avg_pct_of_machine": 38.0,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 5.487,
+            "total_s": 5.487,
+            "audio_s": 11.1,
+            "rtf": 0.494,
+            "peak_rss_gib": 1.981,
+            "cpu_avg_pct_of_one_core": 630.6,
+            "cpu_peak_pct_of_one_core": 772.8,
+            "cpu_avg_pct_of_machine": 39.4,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 6.544,
+            "total_s": 6.544,
+            "audio_s": 11.1,
+            "rtf": 0.59,
+            "peak_rss_gib": 1.957,
+            "cpu_avg_pct_of_one_core": 1069.2,
+            "cpu_peak_pct_of_one_core": 1562.5,
+            "cpu_avg_pct_of_machine": 66.8,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 11.1,
+          "sample_rate": 24000,
+          "rms": 0.0587,
+          "peak": 0.363,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.238,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\bm_george_long.wav"
+      }
+    },
+    "bm_lewis": {
+      "short": {
+        "text": "Good evening, sir.",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 4.435,
+            "total_s": 4.435,
+            "audio_s": 1.95,
+            "rtf": 2.274,
+            "peak_rss_gib": 1.799,
+            "cpu_avg_pct_of_one_core": 427.4,
+            "cpu_peak_pct_of_one_core": 1246.7,
+            "cpu_avg_pct_of_machine": 26.7,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 1.35,
+            "total_s": 1.35,
+            "audio_s": 1.95,
+            "rtf": 0.692,
+            "peak_rss_gib": 1.787,
+            "cpu_avg_pct_of_one_core": 1216.4,
+            "cpu_peak_pct_of_one_core": 1512.1,
+            "cpu_avg_pct_of_machine": 76.0,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 1.371,
+            "total_s": 1.371,
+            "audio_s": 1.95,
+            "rtf": 0.703,
+            "peak_rss_gib": 1.779,
+            "cpu_avg_pct_of_one_core": 1100.8,
+            "cpu_peak_pct_of_one_core": 1394.5,
+            "cpu_avg_pct_of_machine": 68.8,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 1.95,
+          "sample_rate": 24000,
+          "rms": 0.0431,
+          "peak": 0.432,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.505,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\bm_lewis_short.wav"
+      },
+      "primary": {
+        "text": "Hello. This is a short local voice cloning test.",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 2.857,
+            "total_s": 2.857,
+            "audio_s": 3.98,
+            "rtf": 0.719,
+            "peak_rss_gib": 1.81,
+            "cpu_avg_pct_of_one_core": 1080.0,
+            "cpu_peak_pct_of_one_core": 1386.1,
+            "cpu_avg_pct_of_machine": 67.5,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 2.87,
+            "total_s": 2.87,
+            "audio_s": 3.98,
+            "rtf": 0.722,
+            "peak_rss_gib": 1.816,
+            "cpu_avg_pct_of_one_core": 1104.3,
+            "cpu_peak_pct_of_one_core": 1379.7,
+            "cpu_avg_pct_of_machine": 69.0,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 2.807,
+            "total_s": 2.808,
+            "audio_s": 3.98,
+            "rtf": 0.706,
+            "peak_rss_gib": 1.823,
+            "cpu_avg_pct_of_one_core": 1103.1,
+            "cpu_peak_pct_of_one_core": 1346.4,
+            "cpu_avg_pct_of_machine": 68.9,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 3.975,
+          "sample_rate": 24000,
+          "rms": 0.0417,
+          "peak": 0.462,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.389,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\bm_lewis_primary.wav"
+      },
+      "medium": {
+        "text": "All systems are online. I have finished indexing your project and found three files that need attention.",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 4.819,
+            "total_s": 4.82,
+            "audio_s": 7.28,
+            "rtf": 0.662,
+            "peak_rss_gib": 1.9,
+            "cpu_avg_pct_of_one_core": 1102.3,
+            "cpu_peak_pct_of_one_core": 1424.1,
+            "cpu_avg_pct_of_machine": 68.9,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 4.52,
+            "total_s": 4.52,
+            "audio_s": 7.28,
+            "rtf": 0.621,
+            "peak_rss_gib": 1.914,
+            "cpu_avg_pct_of_one_core": 1151.4,
+            "cpu_peak_pct_of_one_core": 1363.0,
+            "cpu_avg_pct_of_machine": 72.0,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 4.737,
+            "total_s": 4.737,
+            "audio_s": 7.28,
+            "rtf": 0.651,
+            "peak_rss_gib": 1.923,
+            "cpu_avg_pct_of_one_core": 1140.5,
+            "cpu_peak_pct_of_one_core": 1396.3,
+            "cpu_avg_pct_of_machine": 71.3,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 7.275,
+          "sample_rate": 24000,
+          "rms": 0.0436,
+          "peak": 0.47,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.333,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\bm_lewis_medium.wav"
+      },
+      "long": {
+        "text": "I have reviewed the schedule for today. You have a meeting at ten, a code review at noon, and a reminder to call your family this evening. Shall I prepare a summary of each?",
+        "runs": [
+          {
+            "run": 1,
+            "first_audio_s": 6.921,
+            "total_s": 6.921,
+            "audio_s": 11.53,
+            "rtf": 0.601,
+            "peak_rss_gib": 1.993,
+            "cpu_avg_pct_of_one_core": 1158.1,
+            "cpu_peak_pct_of_one_core": 1396.3,
+            "cpu_avg_pct_of_machine": 72.4,
+            "logical_cores": 16
+          },
+          {
+            "run": 2,
+            "first_audio_s": 7.007,
+            "total_s": 7.007,
+            "audio_s": 11.53,
+            "rtf": 0.608,
+            "peak_rss_gib": 2.006,
+            "cpu_avg_pct_of_one_core": 1172.8,
+            "cpu_peak_pct_of_one_core": 1396.3,
+            "cpu_avg_pct_of_machine": 73.3,
+            "logical_cores": 16
+          },
+          {
+            "run": 3,
+            "first_audio_s": 6.704,
+            "total_s": 6.704,
+            "audio_s": 11.53,
+            "rtf": 0.582,
+            "peak_rss_gib": 1.973,
+            "cpu_avg_pct_of_one_core": 1191.5,
+            "cpu_peak_pct_of_one_core": 1814.5,
+            "cpu_avg_pct_of_machine": 74.5,
+            "logical_cores": 16
+          }
+        ],
+        "integrity": {
+          "duration_s": 11.525,
+          "sample_rate": 24000,
+          "rms": 0.0451,
+          "peak": 0.461,
+          "clipped_ratio": 0.0,
+          "silent_frame_ratio": 0.311,
+          "finite": true,
+          "readback_ok": true,
+          "issues": [],
+          "ok": true
+        },
+        "wav": "C:\\Users\\Sukumar Reddy\\OneDrive\\Desktop\\Siddhanth\\JARVIS\\voice_eval\\kokoro\\out\\bm_lewis_long.wav"
+      }
+    }
+  },
+  "model_load": {
+    "seconds": 70.46,
+    "peak_rss_gib": 1.957,
+    "cpu_avg_pct_of_one_core": 34.3,
+    "cpu_peak_pct_of_one_core": 1361.8,
+    "cpu_avg_pct_of_machine": 2.1,
+    "logical_cores": 16
+  },
+  "peak_rss_gib_overall": 2.006,
+  "written_at": "2026-10-04T23:38:22+0530"
+}
