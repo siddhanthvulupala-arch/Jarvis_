@@ -5,4 +5,11 @@ __pycache__/
 data/
 *.pyc
 gemini_lock.json
+gemini_usage.json
 .jarvis.pid
+.env
+*.tmp
+brain_verification.png
+brain_verified_render.png
+
+

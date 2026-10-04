@@ -11,9 +11,15 @@ def normalize(text: str) -> str:
 def needs_realtime(text: str) -> bool:
     return any(word in text for word in ("weather", "news", "latest", "current", "price", "stock", "crypto", "score", "schedule"))
 
+import os
+
 def _open(target: str) -> None:
-    if target.startswith(("http://", "https://")): webbrowser.open(target)
-    else: subprocess.Popen(["cmd", "/c", "start", "", target], shell=False)
+    if target.startswith(("http://", "https://")):
+        webbrowser.open(target)
+    elif os.name == "nt":
+        subprocess.Popen(["cmd", "/c", "start", "", target], shell=False)
+    else:
+        subprocess.Popen(["open", target], shell=False)
 
 def local(text: str) -> str | None:
     handled, reply = memory.handle(text)

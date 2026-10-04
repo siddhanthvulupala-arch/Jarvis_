@@ -3,12 +3,12 @@ google-genai
 kokoro>=0.9.4,<0.10
 numpy
 openai-whisper
-pywin32
+pywin32; sys_platform == 'win32'
 scipy
 sounddevice
 soundfile
 sympy
 pywebview
 opencv-python
-mediapipe
+mediapipe>=0.10.14,<1.0.0
 psutil

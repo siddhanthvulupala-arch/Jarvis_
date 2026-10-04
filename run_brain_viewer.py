@@ -92,20 +92,30 @@ def start_server(port: int):
 
 
 def verify_in_headless_browser(url: str, output_image: str = "brain_verification.png"):
-    edge_paths = [
+    candidate_paths = [
+        # Windows
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        # macOS
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        # Linux
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
     ]
-    edge_bin = next((p for p in edge_paths if os.path.exists(p)), None)
-    if not edge_bin:
-        print("[VERIFY] Edge executable not found, skipping headless screenshot.")
+    browser_bin = next((p for p in candidate_paths if os.path.exists(p)), None)
+    if not browser_bin:
+        print("[VERIFY] Compatible browser executable not found, skipping headless screenshot.")
         return False
 
     out_path = Path(output_image).resolve()
-    print(f"[VERIFY] Capturing headless screenshot with Edge to {out_path}...")
+    print(f"[VERIFY] Capturing headless screenshot to {out_path}...")
 
     cmd = [
-        edge_bin,
+        browser_bin,
         "--headless",
         "--hide-scrollbars",
         "--window-size=1280,720",

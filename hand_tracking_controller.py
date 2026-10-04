@@ -155,13 +155,24 @@ class HandTrackingController:
         self.state_lock = threading.Lock()
 
         self._tracking_stage = "MediaPipe initialization"
+        from pathlib import Path
+        import urllib.request
+
+        model_path = Path(__file__).resolve().parent / "data" / "hand_landmarker.task"
+        if not model_path.is_file() or model_path.stat().st_size < 1000:
+            logger.info("Downloading MediaPipe hand_landmarker.task model...")
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+            urllib.request.urlretrieve(url, str(model_path))
+            logger.info("MediaPipe hand_landmarker.task downloaded successfully.")
+
         BaseOptions = mp.tasks.BaseOptions
         HandLandmarker = mp.tasks.vision.HandLandmarker
         HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
         VisionRunningMode = mp.tasks.vision.RunningMode
 
         options = HandLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path='data/hand_landmarker.task'),
+            base_options=BaseOptions(model_asset_path=str(model_path)),
             running_mode=VisionRunningMode.LIVE_STREAM,
             num_hands=2,
             min_hand_detection_confidence=0.5,

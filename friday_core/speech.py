@@ -3,21 +3,35 @@ import numpy as np
 import sounddevice as sd
 import whisper
 from scipy.io.wavfile import write
-from win32com.client import Dispatch
+try:
+    from win32com.client import Dispatch
+except ImportError:
+    Dispatch = None
+import shutil
+import subprocess
 from .settings import ROOT, SILENCE_THRESHOLD, VOICE_NAME, VOICE_RATE, VOICE_VOLUME, WHISPER_MODEL
 _model = None
 _speaker = None
 
 def setup_voice() -> None:
     global _speaker
-    _speaker = Dispatch("SAPI.SpVoice"); _speaker.Rate, _speaker.Volume = VOICE_RATE, VOICE_VOLUME
-    for voice in _speaker.GetVoices():
-        if VOICE_NAME in voice.GetDescription().lower(): _speaker.Voice = voice; break
+    if Dispatch is not None:
+        try:
+            _speaker = Dispatch("SAPI.SpVoice"); _speaker.Rate, _speaker.Volume = VOICE_RATE, VOICE_VOLUME
+            for voice in _speaker.GetVoices():
+                if VOICE_NAME in voice.GetDescription().lower(): _speaker.Voice = voice; break
+        except Exception:
+            _speaker = None
+    else:
+        _speaker = None
 
 def speak(text: str) -> None:
     print(f"Friday: {text}")
-    if _speaker is None: setup_voice()
-    _speaker.Speak(str(text))
+    if _speaker is None and Dispatch is not None: setup_voice()
+    if _speaker is not None:
+        _speaker.Speak(str(text))
+    elif shutil.which("say"):
+        subprocess.run(["say", str(text)], check=False)
 
 def stop() -> None:
     if _speaker is not None: _speaker.Speak("", 2)

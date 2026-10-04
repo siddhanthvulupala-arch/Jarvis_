@@ -62,22 +62,28 @@ class VoiceManager:
             self.legacy_speak(text, cache_tts)
             return
 
-        try:
-            self._elevenlabs_speak(text)
+        engine = os.getenv("JARVIS_TTS", "kokoro").strip().lower()
+        if engine in ("say", "sapi", "macos", "fast", "instant"):
+            self.sapi_speak(text)
             return
-        except Exception as error:
-            if self._log_failure("ElevenLabs", error):
-                print("[VOICE] ElevenLabs failed; falling back to Kokoro")
+
+        if self.api_key:
+            try:
+                self._elevenlabs_speak(text)
+                return
+            except Exception as error:
+                if self._log_failure("ElevenLabs", error):
+                    print("[VOICE] ElevenLabs failed; falling back to Kokoro")
         try:
             self.kokoro_speak(text)
             return
         except Exception as error:
             if self._log_failure("Kokoro", error):
-                print("[VOICE] Kokoro failed; falling back to Microsoft David")
+                print("[VOICE] Kokoro failed; falling back to native voice")
         try:
             self.sapi_speak(text)
         except Exception as error:
-            self._log_failure("Microsoft David", error)
+            self._log_failure("Native voice", error)
 
     def _log_failure(self, provider: str, error: Exception) -> bool:
         if provider not in self._logged_failures:

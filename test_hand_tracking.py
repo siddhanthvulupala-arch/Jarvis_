@@ -5,6 +5,9 @@ class MockUIBridge:
     def _append_event(self, event):
         pass
 
+    def set_hand_state(self, state):
+        pass
+
 print("Starting hand tracking...")
 bridge = MockUIBridge()
 start_hand_tracking(ui_bridge=bridge)

@@ -18,10 +18,34 @@ import tempfile
 import time
 from urllib.parse import quote_plus
 import webbrowser
-import winsound
+try:
+    import winsound
+except ImportError:
+    winsound = None
 import signal
 import threading
 from pathlib import Path
+
+
+def _load_env_file():
+    env_file = Path(__file__).resolve().parent / ".env"
+    if env_file.is_file():
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key, val = key.strip(), val.strip()
+                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                    val = val[1:-1]
+                if key and key not in os.environ:
+                    os.environ[key] = val
+        except Exception:
+            pass
+
+
+_load_env_file()
 
 import numpy as np
 import sounddevice as sd
@@ -29,7 +53,10 @@ import whisper
 from scipy.io.wavfile import write
 from scipy.io import wavfile
 import sys
-from win32com.client import Dispatch
+try:
+    from win32com.client import Dispatch
+except ImportError:
+    Dispatch = None
 from llm_manager.providers import GeminiProvider
 from voice_manager import VoiceManager, match_voice_switch
 import ui_bridge
@@ -53,7 +80,27 @@ print("STARTING JARVIS...")
 
 model = None
 
-speaker = Dispatch("SAPI.SpVoice")
+try:
+    speaker = Dispatch("SAPI.SpVoice") if Dispatch is not None else None
+except Exception:
+    speaker = None
+
+def play_sound_file(path):
+    if winsound is not None:
+        try:
+            winsound.PlaySound(path, winsound.SND_FILENAME)
+            return
+        except Exception as e:
+            print("winsound error:", e)
+    afplay = shutil.which("afplay")
+    if afplay:
+        subprocess.run([afplay, path], check=False)
+        return
+    ffplay = shutil.which("ffplay")
+    if ffplay:
+        subprocess.run([ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", path], check=False)
+        return
+
 TTS_ENGINE = os.getenv("JARVIS_TTS", "kokoro").strip().lower()
 VOICE_NAME = os.getenv("JARVIS_VOICE", "zira").strip().lower()
 FALLBACK_VOICE_NAME = os.getenv("JARVIS_FALLBACK_VOICE", "david").strip().lower()
@@ -78,8 +125,8 @@ current_audio_process = None
 # GEMINI INIT
 # =========================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-GEMINI_SEARCH_MODEL = os.getenv("GEMINI_SEARCH_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_SEARCH_MODEL = os.getenv("GEMINI_SEARCH_MODEL", "gemini-3.8-flash")
 gemini_provider = GeminiProvider(
     api_key=GEMINI_API_KEY,
     model=GEMINI_MODEL,
@@ -214,6 +261,8 @@ MATH_CONSTANTS = {"pi": math.pi, "e": math.e}
 # 3. SPEAK
 # =========================
 def configure_sapi_voice(preferred_voice):
+    if speaker is None:
+        return False
     try:
         speaker.Rate = VOICE_RATE
         speaker.Volume = VOICE_VOLUME
@@ -236,9 +285,38 @@ def configure_sapi_voice(preferred_voice):
 def setup_voice():
     if TTS_ENGINE == "kokoro":
         fallback_voice = configure_sapi_voice(FALLBACK_VOICE_NAME)
-        print(f"Jarvis voice: Kokoro ({KOKORO_VOICE}); loads on first response")
+        print(f"Jarvis voice: Kokoro ({KOKORO_VOICE}); warming up...")
         if fallback_voice:
             print("Fallback voice:", fallback_voice)
+
+        def _warmup_kokoro():
+            global kokoro_pipeline
+            try:
+                import io
+                import logging
+                import warnings
+                import contextlib
+                if kokoro_pipeline is None:
+                    with (
+                        warnings.catch_warnings(),
+                        contextlib.redirect_stdout(io.StringIO()),
+                        contextlib.redirect_stderr(io.StringIO()),
+                    ):
+                        warnings.simplefilter("ignore")
+                        from kokoro import KPipeline
+                        from huggingface_hub.utils import disable_progress_bars
+                        from loguru import logger as kokoro_logger
+                        disable_progress_bars()
+                        kokoro_logger.disable("kokoro")
+                        kokoro_pipeline = KPipeline(lang_code=KOKORO_LANGUAGE, repo_id=KOKORO_REPO_ID)
+                        for _ in kokoro_pipeline(".", voice=KOKORO_VOICE):
+                            pass
+                        kokoro_logger.enable("kokoro")
+                    print("[VOICE] Kokoro neural voice ready.")
+            except Exception as e:
+                print("[VOICE] Background warmup notice:", e)
+
+        threading.Thread(target=_warmup_kokoro, daemon=True).start()
         return
 
     if TTS_ENGINE == "edge" and edge_tts is not None:
@@ -261,23 +339,19 @@ def setup_voice():
 def set_voice_mode(mode):
     global TTS_ENGINE, EDGE_RATE, EDGE_VOICE, edge_tts_disabled
 
-    if mode == "natural":
-        TTS_ENGINE = "edge"
-        EDGE_VOICE = os.getenv("JARVIS_EDGE_VOICE", "en-US-JennyNeural")
-        EDGE_RATE = "+0%"
-        edge_tts_disabled = False
-        voice_manager.legacy_mode = mode
+    if mode in ("fast", "instant", "say"):
+        TTS_ENGINE = "say" if shutil.which("say") else "sapi"
+        os.environ["JARVIS_TTS"] = TTS_ENGINE
+        voice_manager.legacy_mode = None
         setup_voice()
-        return "Natural voice is on."
+        return "Instant voice is on. Replies will be spoken immediately as answers are generated."
 
-    if mode == "fast":
-        TTS_ENGINE = "edge"
-        EDGE_VOICE = os.getenv("JARVIS_EDGE_VOICE", "en-US-JennyNeural")
-        EDGE_RATE = "+18%"
-        edge_tts_disabled = False
-        voice_manager.legacy_mode = mode
+    if mode == "natural":
+        TTS_ENGINE = "kokoro"
+        os.environ["JARVIS_TTS"] = "kokoro"
+        voice_manager.legacy_mode = None
         setup_voice()
-        return "Fast voice is on. Same vibe, less waiting."
+        return "Natural Kokoro voice is on."
 
     if mode == "robot":
         TTS_ENGINE = "sapi"
@@ -291,6 +365,8 @@ def set_voice_mode(mode):
 
 
 def get_voice_names():
+    if speaker is None:
+        return []
     try:
         return [voice.GetDescription() for voice in speaker.GetVoices()]
     except Exception as e:
@@ -471,7 +547,7 @@ async def edge_speak_async(text, cache_audio=False):
                     wav_path,
                 ]
             )
-            winsound.PlaySound(wav_path, winsound.SND_FILENAME)
+            play_sound_file(wav_path)
     finally:
         if ui_bridge is not None:
             ui_bridge.stop_speech()
@@ -602,51 +678,104 @@ def kokoro_speak(text):
                         repo_id=KOKORO_REPO_ID,
                     )
 
-                chunks = []
-                for _, _, audio in kokoro_pipeline(
-                    humanize_speech_text(text), voice=KOKORO_VOICE
-                ):
-                    if hasattr(audio, "detach"):
-                        audio = audio.detach().cpu().numpy()
-                    audio = np.asarray(audio, dtype=np.float32).reshape(-1)
-                    if audio.size:
-                        chunks.append(audio)
+                import queue
+                import threading
+
+                audio_queue = queue.Queue()
+                stop_event = getattr(kokoro_speak, "_stop_event", None)
+                if stop_event is None:
+                    kokoro_speak._stop_event = threading.Event()
+                    stop_event = kokoro_speak._stop_event
+                stop_event.clear()
+
+                has_started_ui = False
+
+                def _player():
+                    nonlocal has_started_ui
+                    while not stop_event.is_set():
+                        try:
+                            item = audio_queue.get(timeout=0.1)
+                        except queue.Empty:
+                            continue
+                        if item is None:
+                            audio_queue.task_done()
+                            break
+                        chunk_audio, duration, envelope = item
+                        if not has_started_ui and ui_bridge is not None:
+                            has_started_ui = True
+                            ui_bridge.start_speech(text, duration, envelope, fps=30)
+                        try:
+                            sd.play(chunk_audio, samplerate=KOKORO_SAMPLE_RATE)
+                            sd.wait()
+                        except Exception:
+                            pass
+                        audio_queue.task_done()
+
+                player_thread = threading.Thread(target=_player, daemon=True)
+                player_thread.start()
+
+                clean_text = humanize_speech_text(text)
+                sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', clean_text) if s.strip()]
+                if not sentences:
+                    sentences = [clean_text]
+
+                has_audio = False
+                try:
+                    for sentence in sentences:
+                        if stop_event.is_set():
+                            break
+                        for _, _, audio in kokoro_pipeline(sentence, voice=KOKORO_VOICE):
+                            if hasattr(audio, "detach"):
+                                audio = audio.detach().cpu().numpy()
+                            audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+                            if audio.size:
+                                has_audio = True
+                                dur = float(len(audio) / KOKORO_SAMPLE_RATE)
+                                env = compute_audio_envelope(audio, KOKORO_SAMPLE_RATE, fps=30)
+                                audio_queue.put((audio, dur, env))
+                finally:
+                    audio_queue.put(None)
+                    player_thread.join()
+                    if ui_bridge is not None:
+                        ui_bridge.stop_speech()
+
+                if not has_audio and not stop_event.is_set():
+                    raise RuntimeError("Kokoro returned no speech audio")
+
             finally:
                 kokoro_logger.enable("kokoro")
     finally:
         for logger, old_level in zip(loggers, old_levels):
             logger.setLevel(old_level)
 
-    if not chunks:
-        raise RuntimeError("Kokoro returned no speech audio")
-
-    full_audio = np.concatenate(chunks)
-    duration = float(len(full_audio) / KOKORO_SAMPLE_RATE)
-    envelope = compute_audio_envelope(full_audio, KOKORO_SAMPLE_RATE, fps=30)
-    if ui_bridge is not None:
-        ui_bridge.start_speech(text, duration, envelope, fps=30)
-    try:
-        sd.play(full_audio, samplerate=KOKORO_SAMPLE_RATE)
-        sd.wait()
-    finally:
-        if ui_bridge is not None:
-            ui_bridge.stop_speech()
-
 
 def sapi_speak(text):
+    global current_audio_process
     duration = max(0.5, len(text.split()) * 0.38)
     envelope = _generate_synthetic_speech_envelope(text, duration, fps=30)
     if ui_bridge is not None:
         ui_bridge.start_speech(text, duration, envelope, fps=30)
     try:
-        speaker.Speak(text)
+        if speaker is not None:
+            speaker.Speak(text)
+        elif shutil.which("say"):
+            macos_voice = os.getenv("JARVIS_MACOS_VOICE", "Daniel")
+            cmd = ["say", "-v", macos_voice, text]
+            current_audio_process = subprocess.Popen(cmd)
+            current_audio_process.wait()
+        else:
+            print(f"[SPEECH FALLBACK] {text}")
     except KeyboardInterrupt:
-        try:
-            speaker.Speak("", 2)
-        except Exception:
-            pass
+        if current_audio_process and current_audio_process.poll() is None:
+            current_audio_process.terminate()
+        if speaker is not None:
+            try:
+                speaker.Speak("", 2)
+            except Exception:
+                pass
         print("Speech interrupted.")
     finally:
+        current_audio_process = None
         if ui_bridge is not None:
             ui_bridge.stop_speech()
 
@@ -711,7 +840,7 @@ def play_elevenlabs_audio(path):
         wav_path = temp_audio.name
     try:
         run_audio_command([ffmpeg_path, "-y", "-loglevel", "error", "-i", path, wav_path])
-        winsound.PlaySound(wav_path, winsound.SND_FILENAME)
+        play_sound_file(wav_path)
     finally:
         try:
             os.remove(wav_path)
@@ -790,16 +919,23 @@ def local_speak(text):
 def stop_speaking():
     global current_audio_process
 
+    if hasattr(kokoro_speak, "_stop_event") and kokoro_speak._stop_event is not None:
+        kokoro_speak._stop_event.set()
+
     if current_audio_process and current_audio_process.poll() is None:
         current_audio_process.terminate()
 
     if TTS_ENGINE == "kokoro":
-        sd.stop()
+        try:
+            sd.stop()
+        except Exception:
+            pass
 
-    try:
-        speaker.Speak("", 2)
-    except Exception:
-        pass
+    if speaker is not None:
+        try:
+            speaker.Speak("", 2)
+        except Exception:
+            pass
 
 
 def update_context(intent, text):
@@ -840,8 +976,10 @@ def open_alias_app(text):
 
     if target.startswith(("http://", "https://")):
         webbrowser.open(target)
-    else:
+    elif os.name == "nt":
         os.system(f'start "" "{target}"')
+    else:
+        subprocess.run(["open", target], check=False)
 
     return True
 
@@ -1123,35 +1261,8 @@ def route(text, intents):
     if looks_like_math(text):
         return "math"
 
-    if is_acknowledgment(text):
-        return "local"
-
-    if is_casual_chat(text):
-        return "local"
-
-    local_keywords = [
-        "open",
-        "search",
-        "play",
-        "youtube",
-        "gmail",
-        "chrome",
-        "discord",
-        "spotify",
-        "vscode",
-        "vs code",
-        "files",
-        "study playlist",
-        "asphalt",
-        "goodnotes",
-        "good notes",
-        "reboot",
-        "restart",
-        "thankyou",
-        "thank you",
-        "how are you",
-        "who are you",
-        "what can you do",
+    # Specific system & hardware control commands
+    system_control_phrases = {
         "turn on hand tracking",
         "enable hand tracking",
         "start hand tracking",
@@ -1166,39 +1277,61 @@ def route(text, intents):
         "switch to natural voice",
         "switch to fast voice",
         "switch to robot voice",
+        "natural voice",
+        "fast voice",
+        "robot voice",
         "clear memory",
-        "stop speaking",
-        "stop talking",
-        "hey there",
-        "sup",
-        "wassup",
-        "whats up",
-        "good morning",
-        "good afternoon",
-        "good evening",
-        "are you there",
+        "forget conversation",
         "increase volume",
         "decrease volume",
         "mute",
         "unmute",
-        "notion",
+        "volume up",
+        "volume down",
         "focus mode",
         "world monitor",
-    ]
+        "reboot",
+        "restart",
+        "study playlist",
+        "play playlist",
+    }
+    if text in system_control_phrases:
+        return "local"
 
-    for keyword in local_keywords:
-        if re.search(r"\b" + re.escape(keyword) + r"\b", text):
+    # App launches (check against aliases and known app names)
+    if text.startswith("open ") or text.startswith("launch "):
+        target = text.split(" ", 1)[1].strip()
+        known_apps = {
+            "chrome", "google chrome", "spotify", "vscode", "vs code", "notion",
+            "files", "finder", "file explorer", "goodnotes", "good notes",
+            "asphalt", "asphalt 9", "youtube", "gmail", "chatgpt", "discord",
+        }
+        aliases = load_app_aliases()
+        if target in known_apps or target in aliases:
             return "local"
 
-    if needs_realtime_data(text):
+    # Realtime topics, news, search queries
+    if (
+        needs_realtime_data(text)
+        or text.startswith("search ")
+        or text.startswith("search for ")
+        or text.startswith("google ")
+        or text.startswith("look up ")
+    ):
         return "realtime"
 
-    if "greet" in intents:
+    # Simple local time/date if requested plainly
+    if text in ["time", "what time is it", "tell me the time", "current time"]:
+        return "local"
+    if text in ["date", "what is the date", "what's the date", "today's date", "today"]:
         return "local"
 
-    if "time" in intents or "date" in intents:
-        return "local"
+    # Casual chat: only local if no Gemini API key is configured
+    if not GEMINI_API_KEY:
+        if is_acknowledgment(text) or is_casual_chat(text) or "greet" in intents:
+            return "local"
 
+    # Default to Gemini AI for all topics, explanations, questions, and inquiries
     return "ai"
 
 
@@ -1816,14 +1949,22 @@ def local_brain(text):
         hand_tracking_controller.stop_hand_tracking()
         return True
 
-    if "search" in text:
-        query = text.replace("search", "").strip()
+    if text.startswith("search ") or text.startswith("google ") or text.startswith("look up ") or text.startswith("find "):
+        query = re.sub(r"^(?:search\s+(?:for\s+)?|google\s+|look\s+up\s+|find\s+)", "", text).strip()
         if not query:
-            local_speak("What should I search?")
+            local_speak("What topic would you like me to look into, boss?")
             return True
 
-        local_speak("Searching")
         context["last_search"] = query
+        if GEMINI_API_KEY:
+            reply = gemini_brain(f"Search and explain: {query}", use_grounding=True)
+            if not reply:
+                reply = gemini_brain(f"Search and explain: {query}", use_grounding=False)
+            if reply:
+                speak(reply)
+                return True
+
+        local_speak(f"Searching for {query}")
         url = f"https://www.google.com/search?q={quote_plus(query)}"
         webbrowser.open(url)
         return True
@@ -1839,102 +1980,163 @@ def local_brain(text):
 
     if "increase volume" in text:
         local_speak("Increasing volume")
-        os.system(".\\nircmd.exe changesysvolume 8000")
+        if os.name == "nt":
+            os.system(".\\nircmd.exe changesysvolume 8000")
+        else:
+            subprocess.run(["osascript", "-e", "set volume output volume ((output volume of (get volume settings)) + 10)"], check=False)
         return True
 
     if "decrease volume" in text:
         local_speak("Decreasing volume")
-        os.system(".\\nircmd.exe changesysvolume -8000")
+        if os.name == "nt":
+            os.system(".\\nircmd.exe changesysvolume -8000")
+        else:
+            subprocess.run(["osascript", "-e", "set volume output volume ((output volume of (get volume settings)) - 10)"], check=False)
         return True
 
     if "unmute" in text:
         local_speak("Unmuting volume")
-        os.system(".\\nircmd.exe mutesysvolume 0")
+        if os.name == "nt":
+            os.system(".\\nircmd.exe mutesysvolume 0")
+        else:
+            subprocess.run(["osascript", "-e", "set volume output muted false"], check=False)
         return True
 
     if "mute" in text:
         local_speak("Muting volume")
-        os.system(".\\nircmd.exe mutesysvolume 1")
+        if os.name == "nt":
+            os.system(".\\nircmd.exe mutesysvolume 1")
+        else:
+            subprocess.run(["osascript", "-e", "set volume output muted true"], check=False)
         return True
 
     if "focus mode" in text:
         local_speak("Activating focus mode")
-        os.system("powercfg /setactive SCHEME_MAX")
-        os.system("start https://chat.openai.com")
-        os.system('start "" "C:\\Users\\Sukumar Reddy\\AppData\\Local\\Programs\\Notion\\Notion.exe"')
-        os.system("start https://open.spotify.com/playlist/27vyFEwT54i4O6kejM0TOm")
+        if os.name == "nt":
+            os.system("powercfg /setactive SCHEME_MAX")
+            os.system("start https://chat.openai.com")
+            os.system('start "" "C:\\Users\\Sukumar Reddy\\AppData\\Local\\Programs\\Notion\\Notion.exe"')
+            os.system("start https://open.spotify.com/playlist/27vyFEwT54i4O6kejM0TOm")
+        else:
+            webbrowser.open("https://chat.openai.com")
+            subprocess.run(["open", "-a", "Notion"], check=False)
+            webbrowser.open("https://open.spotify.com/playlist/27vyFEwT54i4O6kejM0TOm")
 
         local_speak("Do you want me to open YouTube?")
         if listen_yes_no():
             local_speak("Opening YouTube")
-            os.system("start https://www.youtube.com")
+            if os.name == "nt":
+                os.system("start https://www.youtube.com")
+            else:
+                webbrowser.open("https://www.youtube.com")
         else:
             local_speak("Okay, continuing without YouTube")
         return True
 
     if "open chrome" in text:
         local_speak("Opening Chrome")
-        os.system("start chrome")
+        if os.name == "nt":
+            os.system("start chrome")
+        else:
+            subprocess.run(["open", "-a", "Google Chrome"], check=False)
         return True
 
     if "open discord" in text:
         local_speak("Opening Discord")
-        os.system("start https://discord.com")
+        if os.name == "nt":
+            os.system("start https://discord.com")
+        else:
+            webbrowser.open("https://discord.com")
         return True
 
     if "open spotify" in text:
         local_speak("Opening Spotify")
-        os.system("start spotify")
+        if os.name == "nt":
+            os.system("start spotify")
+        else:
+            subprocess.run(["open", "-a", "Spotify"], check=False)
         return True
 
     if "open vscode" in text or "open vs code" in text:
         local_speak("Opening VS Code")
-        os.system("code")
+        if os.name == "nt":
+            os.system("code")
+        else:
+            res = subprocess.run(["code"], check=False)
+            if res.returncode != 0:
+                subprocess.run(["open", "-a", "Visual Studio Code"], check=False)
         return True
 
     if "open notion" in text:
         local_speak("Opening Notion")
-        os.system('start "" "C:\\Users\\Sukumar Reddy\\AppData\\Local\\Programs\\Notion\\Notion.exe"')
+        if os.name == "nt":
+            os.system('start "" "C:\\Users\\Sukumar Reddy\\AppData\\Local\\Programs\\Notion\\Notion.exe"')
+        else:
+            subprocess.run(["open", "-a", "Notion"], check=False)
         return True
 
     if "open files" in text:
         local_speak("Opening File Explorer")
-        os.system("explorer")
+        if os.name == "nt":
+            os.system("explorer")
+        else:
+            subprocess.run(["open", str(Path.home())], check=False)
         return True
 
     if "goodnotes" in text or "good notes" in text:
         local_speak("Opening GoodNotes")
-        os.system("start shell:AppsFolder\\GoodnotesLimited.GoodNotesforWindows_wjqdg2qn10y2j!App")
+        if os.name == "nt":
+            os.system("start shell:AppsFolder\\GoodnotesLimited.GoodNotesforWindows_wjqdg2qn10y2j!App")
+        else:
+            subprocess.run(["open", "-a", "GoodNotes"], check=False)
         return True
 
     if "open asphalt" in text:
         local_speak("Opening Asphalt")
-        os.system("start shell:AppsFolder\\A278AB0D.Asphalt9_h6adky7gbf63m!Asphalt9")
+        if os.name == "nt":
+            os.system("start shell:AppsFolder\\A278AB0D.Asphalt9_h6adky7gbf63m!Asphalt9")
+        else:
+            subprocess.run(["open", "-a", "Asphalt 9"], check=False)
         return True
 
     if "open youtube" in text:
         local_speak("Opening YouTube")
-        os.system("start https://www.youtube.com")
+        if os.name == "nt":
+            os.system("start https://www.youtube.com")
+        else:
+            webbrowser.open("https://www.youtube.com")
         return True
 
     if "open gmail" in text:
         local_speak("Opening Gmail")
-        os.system("start https://mail.google.com")
+        if os.name == "nt":
+            os.system("start https://mail.google.com")
+        else:
+            webbrowser.open("https://mail.google.com")
         return True
 
     if "open chatgpt" in text:
         local_speak("Opening ChatGPT")
-        os.system("start https://chat.openai.com")
+        if os.name == "nt":
+            os.system("start https://chat.openai.com")
+        else:
+            webbrowser.open("https://chat.openai.com")
         return True
 
     if "study playlist" in text or "play playlist" in text:
         local_speak("Playing your study playlist")
-        os.system("start https://open.spotify.com/playlist/27vyFEwT54i4O6kejM0TOm?si=f6a31c73cac64030")
+        if os.name == "nt":
+            os.system("start https://open.spotify.com/playlist/27vyFEwT54i4O6kejM0TOm?si=f6a31c73cac64030")
+        else:
+            webbrowser.open("https://open.spotify.com/playlist/27vyFEwT54i4O6kejM0TOm?si=f6a31c73cac64030")
         return True
 
     if "reboot" in text or "restart" in text:
         local_speak("System will restart in 5 seconds")
-        os.system("shutdown /r /t 5")
+        if os.name == "nt":
+            os.system("shutdown /r /t 5")
+        else:
+            subprocess.run(["osascript", "-e", 'tell app "System Events" to restart'], check=False)
         return True
 
     return False
@@ -1999,10 +2201,19 @@ def handle(intents, text):
                 local_speak(f"Today is {datetime.datetime.now().strftime('%B %d, %Y')}")
                 return
 
+        # Fallback to Gemini AI for any query or topic not handled by local rules
+        if GEMINI_API_KEY:
+            reply = gemini_brain(text)
+            if reply:
+                speak(reply)
+                return
+
     if decision == "realtime":
         reply = gemini_brain(text, use_grounding=True)
         if not reply:
-            reply = "I could not reach live search data right now."
+            reply = gemini_brain(text, use_grounding=False)
+        if not reply:
+            reply = "I could not reach live data right now."
         speak(reply)
         return
 
@@ -2150,9 +2361,13 @@ def debug_text_loop():
         while not shutdown_requested.is_set():
             try:
                 text = input("> ")
-            except (KeyboardInterrupt, EOFError):
+            except KeyboardInterrupt:
                 request_shutdown("keyboard_interrupt")
                 break
+            except EOFError:
+                if shutdown_requested.wait(timeout=1.0):
+                    break
+                continue
             handle_text(text)
     finally:
         request_shutdown("debug_loop_exit")

@@ -46,18 +46,40 @@ def _is_pid_alive(pid: int) -> bool:
 
 
 def _get_pid_for_port(port: int) -> int | None:
-    """Find the process ID currently listening on *port* (Windows-compatible)."""
+    """Find the process ID currently listening on *port*."""
+    if os.name == "nt":
+        try:
+            output = subprocess.check_output(
+                ["netstat", "-ano", "-p", "tcp"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            for line in output.splitlines():
+                parts = line.strip().split()
+                # Netstat format: TCP  127.0.0.1:8765  0.0.0.0:0  LISTENING  <PID>
+                if len(parts) >= 5 and parts[-2] == "LISTENING" and parts[1].endswith(f":{port}"):
+                    return int(parts[-1])
+        except Exception:
+            pass
+        return None
+
+    # macOS / Linux: Try psutil first, then lsof
+    try:
+        import psutil
+        for conn in psutil.net_connections(kind="tcp"):
+            if conn.laddr and conn.laddr.port == port and conn.status == psutil.CONN_LISTEN:
+                return conn.pid
+    except Exception:
+        pass
     try:
         output = subprocess.check_output(
-            ["netstat", "-ano", "-p", "tcp"],
+            ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
             text=True,
             stderr=subprocess.DEVNULL,
         )
-        for line in output.splitlines():
-            parts = line.strip().split()
-            # Netstat format: TCP  127.0.0.1:8765  0.0.0.0:0  LISTENING  <PID>
-            if len(parts) >= 5 and parts[-2] == "LISTENING" and parts[1].endswith(f":{port}"):
-                return int(parts[-1])
+        pids = [int(p) for p in output.strip().splitlines() if p.isdigit()]
+        if pids:
+            return pids[0]
     except Exception:
         pass
     return None
@@ -76,19 +98,32 @@ def _probe_health(port: int, timeout: float = 2.0) -> bool:
 
 
 def _get_process_cmdline(pid: int) -> str:
-    """Retrieve process command line for identification (Windows-compatible)."""
+    """Retrieve process command line for identification."""
     try:
-        cmd = [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine",
-        ]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
-        return res.stdout.strip()
+        import psutil
+        p = psutil.Process(pid)
+        return " ".join(p.cmdline())
     except Exception:
-        return ""
+        pass
+    if os.name == "nt":
+        try:
+            cmd = [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine",
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            return res.stdout.strip()
+        except Exception:
+            return ""
+    else:
+        try:
+            res = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=3)
+            return res.stdout.strip()
+        except Exception:
+            return ""
 
 
 def _is_jarvis_process(pid: int) -> bool:
