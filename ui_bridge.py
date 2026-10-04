@@ -258,6 +258,17 @@ class UIBridge:
         self.handle_text = handle_text
         self.port = port
         self._lock = threading.RLock()
+        self._hand_state_changed = threading.Condition(self._lock)
+        self._latest_hand_state = {
+            "tracking": False,
+            "hand": None,
+            "x": 0.5,
+            "y": 0.5,
+            "timestamp": time.time(),
+            "hands": [],
+            "fps": 0.0,
+        }
+        self._hand_state_revision = 0
         self._request_lock = threading.Lock()
         self._events: deque[dict] = deque(maxlen=256)
         self._event_id = 0
@@ -314,6 +325,29 @@ class UIBridge:
                     except ValueError:
                         since = 0
                     self._send_json(200, bridge.poll(since))
+                    return
+                if parsed.path == "/api/hand-state/stream":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.end_headers()
+                    revision = -1
+                    try:
+                        while True:
+                            with bridge._hand_state_changed:
+                                bridge._hand_state_changed.wait_for(
+                                    lambda: bridge._hand_state_revision != revision or bridge._stopped,
+                                    timeout=15.0,
+                                )
+                                if bridge._stopped:
+                                    break
+                                revision = bridge._hand_state_revision
+                                payload = {"revision": revision, "state": dict(bridge._latest_hand_state)}
+                            self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode("utf-8"))
+                            self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        pass
                     return
                 if parsed.path == "/api/health":
                     self._send_json(200, {"ok": True, "service": "jarvis"})
@@ -394,6 +428,7 @@ class UIBridge:
             if self._stopped:
                 return
             self._stopped = True
+            self._hand_state_changed.notify_all()
             server = self._server
             self._server = None
 
@@ -538,3 +573,10 @@ class UIBridge:
     def _append_event(self, event: dict) -> None:
         self._event_id += 1
         self._events.append({"id": self._event_id, **event})
+
+    def set_hand_state(self, state: dict) -> None:
+        """Replace the current sensor snapshot and notify stream clients."""
+        with self._hand_state_changed:
+            self._latest_hand_state = dict(state)
+            self._hand_state_revision += 1
+            self._hand_state_changed.notify_all()

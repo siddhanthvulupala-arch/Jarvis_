@@ -349,13 +349,6 @@
             border-radius: 2px;
         }
 
-        #hand-tracking-data {
-            font-size: 9px;
-            letter-spacing: 1px;
-            color: var(--primary-bright);
-            min-height: 12px;
-        }
-
         #chat-header {
             display: flex;
             justify-content: space-between;
@@ -801,7 +794,6 @@
     <div id="hand-tracking-panel">
         <div id="hand-tracking-header">SENSOR // HAND TRACKING</div>
         <canvas id="hand-tracking-canvas" width="280" height="180"></canvas>
-        <div id="hand-tracking-data">WAITING FOR DATA...</div>
     </div>
 
     <!-- THREE.JS CANVAS CONTAINER -->
@@ -910,17 +902,311 @@
         masterCoreGroup.add(outerLayers);
 
         // Hologram Interaction State
-        let isGrabbing = false;
-        let grabStartX = 0;
-        let grabStartY = 0;
-        let smoothedPx = 0;
-        let smoothedPy = 0;
-        let coreStartX = 0;
-        let coreStartY = 0;
-        let targetCorePosX = 0;
-        let targetCorePosY = 0;
-        let coreSpinVX = 0;
-        let coreSpinVY = 0;
+        let latestHandState = { tracking: false, hand: null, x: 0.5, y: 0.5, timestamp: 0, hands: [] };
+        let latestHandStateReceivedAt = 0;
+        let lastGestureDeliveryLatencyMs = null;
+        let uiFrameCount = 0;
+        let uiFrameWindowStart = performance.now();
+        let uiMeasuredFps = 0;
+        const coreInteractionTarget = { x: 0, y: 0, z: 0, scale: 1, rotationX: 0, rotationY: 0 };
+        const HAND_INTERACTION_CONFIG = Object.freeze({
+            positionSmoothing: 0.86,
+            depthSmoothing: 0.75,
+            velocitySmoothing: 0.45,
+            positionDeadzone: 0.006,
+            interactionActivationThreshold: 0.009,
+            maximumInteractionVelocity: 120,
+            maximumZoomVelocity: 22,
+            maximumRotationVelocity: 3.0,
+            maximumCoreRotation: 1.2,
+            twoHandScaleActivationFrames: 3,
+            twoHandScaleDeadzone: 0.035,
+            twoHandScaleSmoothingSeconds: 0.18,
+            twoHandScaleCooldownSeconds: 0.45,
+            minimumCoreScale: 0.65,
+            maximumCoreScale: 1.8
+        });
+
+        // Sensor snapshots are converted into semantic interaction commands here;
+        // this layer never writes to the Three.js scene directly.
+        class HandInteractionStateMachine {
+            constructor() {
+                this.state = 'IDLE';
+                this.anchor = null;
+                this.awaitingPinchRelease = false;
+                this.scalePair = null;
+                this.scaleActivationPair = null;
+                this.scaleActivationFrames = 0;
+                this.scaleInitialDistance = 0;
+                this.scaleInitialValue = 1;
+                this.scaleLastTimestamp = 0;
+                this.scaleCooldownUntil = 0;
+            }
+
+            update(snapshot, transform) {
+                const commands = [];
+                const availableHands = snapshot.tracking ? (snapshot.hands || []) : [];
+                const now = Number(snapshot.timestamp) || Date.now() / 1000;
+                const freshHands = availableHands.filter((hand) => Array.isArray(hand.landmarks) &&
+                    hand.landmarks.length === 21 &&
+                    (Date.now() / 1000 - snapshot.timestamp) < 0.65);
+
+                // An active single-hand grab/rotation owns its hand. Otherwise,
+                // a stable non-pinch pair gets exclusive ownership for scaling.
+                if (!this.anchor && this.scalePair) {
+                    const pair = freshHands.filter((hand) => this.scalePair.includes(hand.hand));
+                    const pairValid = pair.length === 2 && this.scalePair.every((label) =>
+                        pair.some((hand) => hand.hand === label));
+                    const pairHasPinch = pair.some((hand) => String(hand.gesture || '').toUpperCase() === 'PINCH');
+                    if (!pairValid || pairHasPinch) {
+                        this.endTwoHandScale(now);
+                        return commands;
+                    }
+                    this.updateTwoHandScale(pair, now, transform, commands);
+                    return commands;
+                }
+
+                if (!this.anchor && now >= this.scaleCooldownUntil) {
+                    const pair = this.findScalePair(freshHands);
+                    if (pair) {
+                        const key = pair.map((hand) => hand.hand).sort().join(':');
+                        if (key === this.scaleActivationPair) this.scaleActivationFrames += 1;
+                        else {
+                            this.scaleActivationPair = key;
+                            this.scaleActivationFrames = 1;
+                        }
+                        this.state = 'TWO_HAND_SCALE_PENDING';
+                        if (this.scaleActivationFrames < HAND_INTERACTION_CONFIG.twoHandScaleActivationFrames) return commands;
+                        this.scalePair = key.split(':');
+                        this.scaleInitialDistance = this.measureHandDistance(pair[0], pair[1]);
+                        this.scaleInitialValue = transform.scale;
+                        this.scaleLastTimestamp = now;
+                        this.scaleActivationPair = null;
+                        this.scaleActivationFrames = 0;
+                        this.updateTwoHandScale(pair, now, transform, commands);
+                        return commands;
+                    }
+                    this.scaleActivationPair = null;
+                    this.scaleActivationFrames = 0;
+                }
+
+                const trackedHand = this.anchor
+                    ? availableHands.find((hand) => hand.hand === this.anchor.hand)
+                    : (availableHands.find((hand) => hand.role === 'primary' && String(hand.gesture || '').toUpperCase() === 'PINCH') ||
+                       availableHands.find((hand) => String(hand.gesture || '').toUpperCase() === 'PINCH') ||
+                       availableHands.find((hand) => hand.role === 'primary' && String(hand.gesture || '').toUpperCase() === 'TWO_FINGER') ||
+                       availableHands.find((hand) => String(hand.gesture || '').toUpperCase() === 'TWO_FINGER') ||
+                       availableHands.find((hand) => hand.role === 'primary') || availableHands[0]);
+                const fresh = Boolean(trackedHand && Array.isArray(trackedHand.landmarks) &&
+                    trackedHand.landmarks.length === 21 &&
+                    (Date.now() / 1000 - snapshot.timestamp) < 0.65);
+                const gesture = fresh ? String(trackedHand.gesture || '').toUpperCase() : '';
+
+                if (this.anchor) {
+                    if (!fresh || gesture !== this.anchor.gesture) {
+                        const cancelled = gesture === 'FIST';
+                        if (!fresh && this.anchor.gesture === 'PINCH') this.awaitingPinchRelease = true;
+                        else if (gesture !== 'PINCH') this.awaitingPinchRelease = false;
+                        this.state = 'PINCH_RELEASED';
+                        this.anchor = null;
+                        commands.push({ type: 'CORE_RELEASE', reason: cancelled ? 'FIST' : 'GESTURE_RELEASE' });
+                        return commands;
+                    }
+                    if (gesture === 'PINCH') {
+                        this.state = 'MANIPULATING';
+                        this.updatePinch(trackedHand.landmarks, snapshot.timestamp, commands);
+                    } else if (gesture === 'TWO_FINGER') {
+                        this.state = 'ROTATING';
+                        this.updateRotation(trackedHand.landmarks, snapshot.timestamp, commands);
+                    }
+                    return commands;
+                }
+
+                if (!fresh) {
+                    this.state = 'IDLE';
+                    return commands;
+                }
+                if (this.awaitingPinchRelease) {
+                    if (gesture === 'PINCH') return commands;
+                    this.awaitingPinchRelease = false;
+                }
+                if (gesture === 'PINCH' || gesture === 'TWO_FINGER') {
+                    this.acquire(trackedHand, gesture, transform, commands);
+                } else if (['OPEN_PALM', 'FIST', 'POINT'].includes(gesture)) {
+                    this.state = gesture;
+                } else {
+                    this.state = 'IDLE';
+                }
+                return commands;
+            }
+
+            findScalePair(hands) {
+                if (hands.length < 2 || hands.some((hand) => ['PINCH', 'TWO_FINGER'].includes(
+                    String(hand.gesture || '').toUpperCase()))) return null;
+                const left = hands.find((hand) => String(hand.hand).toLowerCase() === 'left');
+                const right = hands.find((hand) => String(hand.hand).toLowerCase() === 'right');
+                return left && right ? [left, right] : null;
+            }
+
+            measureHandDistance(first, second) {
+                const a = first.landmarks[0];
+                const b = second.landmarks[0];
+                return Math.max(0.001, Math.hypot(a.x - b.x, a.y - b.y));
+            }
+
+            updateTwoHandScale(pair, timestamp, transform, commands) {
+                const cfg = HAND_INTERACTION_CONFIG;
+                const relativeChange = this.measureHandDistance(pair[0], pair[1]) / this.scaleInitialDistance - 1;
+                let desired = this.scaleInitialValue;
+                if (Math.abs(relativeChange) > cfg.twoHandScaleDeadzone) {
+                    desired = this.scaleInitialValue * (1 + relativeChange);
+                }
+                desired = Math.max(cfg.minimumCoreScale, Math.min(cfg.maximumCoreScale, desired));
+                const elapsed = Math.max(0.04, Math.min(0.5, timestamp - this.scaleLastTimestamp));
+                const alpha = 1 - Math.exp(-elapsed / cfg.twoHandScaleSmoothingSeconds);
+                const currentTarget = coreInteractionTarget.scale;
+                coreInteractionTarget.scale = currentTarget + (desired - currentTarget) * alpha;
+                this.scaleLastTimestamp = timestamp;
+                this.state = 'TWO_HAND_SCALE';
+                commands.push({ type: 'CORE_TWO_HAND_SCALE', scale: coreInteractionTarget.scale });
+            }
+
+            endTwoHandScale(timestamp) {
+                this.scalePair = null;
+                this.scaleActivationPair = null;
+                this.scaleActivationFrames = 0;
+                this.scaleCooldownUntil = timestamp + HAND_INTERACTION_CONFIG.twoHandScaleCooldownSeconds;
+                this.state = 'IDLE';
+            }
+
+            acquire(hand, gesture, transform, commands) {
+                const points = hand.landmarks;
+                const isPinch = gesture === 'PINCH';
+                const x = isPinch ? 1 - (points[4].x + points[8].x) / 2 : 1 - points[0].x;
+                const y = isPinch ? (points[4].y + points[8].y) / 2 : points[0].y;
+                const timestamp = latestHandState.timestamp;
+                this.state = 'PINCH_DETECTED';
+                this.anchor = {
+                    hand: hand.hand, gesture, x, y, filteredX: x, filteredY: y,
+                    coreX: transform.x, coreY: transform.y, coreZ: transform.z,
+                    targetX: transform.x, targetY: transform.y, targetZ: transform.z,
+                    scale: transform.scale, targetScale: transform.scale,
+                    rotationX: transform.rotationX, rotationY: transform.rotationY,
+                    targetRotationX: transform.rotationX, targetRotationY: transform.rotationY,
+                    depthSize: Math.max(this.measureDepth(points), 0.001), filteredDepthRatio: 0,
+                    depthEngaged: false, lastTimestamp: timestamp, velocityX: 0, velocityY: 0
+                };
+                this.state = 'GRABBED';
+                commands.push({ type: 'CORE_GRAB', gesture, hand: hand.hand });
+            }
+
+            measureDepth(points) {
+                const distance = (a, b) => Math.hypot(points[a].x - points[b].x, points[a].y - points[b].y);
+                const measures = [distance(5, 17), distance(0, 9), distance(0, 12)].sort((a, b) => a - b);
+                return measures[1];
+            }
+
+            updatePinch(points, timestamp, commands) {
+                const a = this.anchor;
+                const cfg = HAND_INTERACTION_CONFIG;
+                const rawX = 1 - (points[4].x + points[8].x) / 2;
+                const rawY = (points[4].y + points[8].y) / 2;
+                const elapsed = Math.max(0.04, Math.min(0.5, timestamp - a.lastTimestamp));
+                const previousX = a.filteredX;
+                const previousY = a.filteredY;
+                a.filteredX += (rawX - a.filteredX) * cfg.positionSmoothing;
+                a.filteredY += (rawY - a.filteredY) * cfg.positionSmoothing;
+                const filteredDX = a.filteredX - a.x;
+                const filteredDY = a.filteredY - a.y;
+                const dx = Math.abs(filteredDX) < cfg.positionDeadzone ? 0 : filteredDX;
+                const dy = Math.abs(filteredDY) < cfg.positionDeadzone ? 0 : filteredDY;
+                let desiredX = a.coreX + dx * 100;
+                let desiredY = a.coreY - dy * 70;
+                if (Math.hypot(dx, dy) < cfg.interactionActivationThreshold) {
+                    desiredX = a.coreX;
+                    desiredY = a.coreY;
+                }
+
+                const measuredVX = (a.filteredX - previousX) * 100 / elapsed;
+                const measuredVY = -(a.filteredY - previousY) * 70 / elapsed;
+                a.velocityX += (measuredVX - a.velocityX) * cfg.velocitySmoothing;
+                a.velocityY += (measuredVY - a.velocityY) * cfg.velocitySmoothing;
+                const targetDX = desiredX - a.targetX;
+                const targetDY = desiredY - a.targetY;
+                const targetDistance = Math.hypot(targetDX, targetDY);
+                const measuredSpeed = Math.hypot(a.velocityX, a.velocityY);
+                const velocityScale = measuredSpeed > cfg.maximumInteractionVelocity
+                    ? cfg.maximumInteractionVelocity / measuredSpeed : 1;
+                const maxStep = cfg.maximumInteractionVelocity * elapsed;
+                const stepScale = targetDistance > maxStep && targetDistance > 0
+                    ? maxStep / targetDistance : 1;
+                a.targetX += targetDX * Math.min(velocityScale, stepScale) * cfg.positionSmoothing;
+                a.targetY += targetDY * Math.min(velocityScale, stepScale) * cfg.positionSmoothing;
+                a.lastTimestamp = timestamp;
+                commands.push({ type: 'CORE_MOVE', x: a.targetX, y: a.targetY,
+                    velocityX: a.velocityX, velocityY: a.velocityY });
+
+                const ratio = this.measureDepth(points) / a.depthSize - 1;
+                a.filteredDepthRatio += (ratio - a.filteredDepthRatio) * cfg.depthSmoothing;
+                const deadzone = a.depthEngaged ? 0.025 : 0.04;
+                a.depthEngaged = Math.abs(a.filteredDepthRatio) >= deadzone;
+                const depth = a.depthEngaged ? a.filteredDepthRatio : 0;
+                const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+                const desiredZ = a.coreZ + clamp(depth * 28, -12, 16);
+                const maxZoomStep = cfg.maximumZoomVelocity * elapsed;
+                a.targetZ += clamp(desiredZ - a.targetZ, -maxZoomStep, maxZoomStep) * cfg.depthSmoothing;
+                a.targetScale = a.scale * clamp(1 + depth * 1.2, 0.65, 1.8);
+                commands.push({ type: 'CORE_ZOOM', z: a.targetZ, scale: a.targetScale, depthRatio: depth });
+            }
+
+            updateRotation(points, timestamp, commands) {
+                const a = this.anchor;
+                const cfg = HAND_INTERACTION_CONFIG;
+                const elapsed = Math.max(0.04, Math.min(0.5, timestamp - a.lastTimestamp));
+                const x = 1 - points[0].x;
+                const y = points[0].y;
+                a.filteredX += (x - a.filteredX) * cfg.positionSmoothing;
+                a.filteredY += (y - a.filteredY) * cfg.positionSmoothing;
+                const dx = Math.abs(a.filteredX - a.x) < cfg.positionDeadzone ? 0 : a.filteredX - a.x;
+                const dy = Math.abs(a.filteredY - a.y) < cfg.positionDeadzone ? 0 : a.filteredY - a.y;
+                const bound = cfg.maximumCoreRotation;
+                const desiredY = Math.max(a.rotationY - bound, Math.min(a.rotationY + bound, a.rotationY + dx * 3.5));
+                const desiredX = Math.max(a.rotationX - bound, Math.min(a.rotationX + bound, a.rotationX - dy * 3.5));
+                const maxRotationStep = cfg.maximumRotationVelocity * elapsed;
+                a.targetRotationY += Math.max(-maxRotationStep, Math.min(maxRotationStep, desiredY - a.targetRotationY)) * cfg.positionSmoothing;
+                a.targetRotationX += Math.max(-maxRotationStep, Math.min(maxRotationStep, desiredX - a.targetRotationX)) * cfg.positionSmoothing;
+                a.lastTimestamp = timestamp;
+                commands.push({ type: 'CORE_ROTATE', rotationX: a.targetRotationX, rotationY: a.targetRotationY });
+            }
+        }
+
+        const handInteraction = new HandInteractionStateMachine();
+        function applyHandInteractionCommands(commands) {
+            for (const command of commands) {
+                if (command.type === 'CORE_MOVE') {
+                    coreInteractionTarget.x = command.x;
+                    coreInteractionTarget.y = command.y;
+                } else if (command.type === 'CORE_ZOOM') {
+                    coreInteractionTarget.z = command.z;
+                    coreInteractionTarget.scale = command.scale;
+                } else if (command.type === 'CORE_ROTATE') {
+                    coreInteractionTarget.rotationX = command.rotationX;
+                    coreInteractionTarget.rotationY = command.rotationY;
+                } else if (command.type === 'CORE_TWO_HAND_SCALE') {
+                    coreInteractionTarget.scale = command.scale;
+                } else if (command.type === 'CORE_RELEASE') {
+                    coreInteractionTarget.x = 0;
+                    coreInteractionTarget.y = 0;
+                    coreInteractionTarget.z = 0;
+                    coreInteractionTarget.scale = 1;
+                    addChatLine(command.reason === 'FIST'
+                        ? '[INTERACTION] Fist cancelled the core interaction'
+                        : '[INTERACTION] Released holographic core', 'assistant');
+                } else if (command.type === 'CORE_GRAB') {
+                    addChatLine(`[INTERACTION] ${command.gesture === 'PINCH' ? 'Pinch grabbed' : 'Two-finger rotation engaged'} holographic core`, 'assistant');
+                }
+            }
+        }
 
         // Palettes & Materials
         const colors = {
@@ -1188,9 +1474,17 @@
         let reticleX = mouseX;
         let reticleY = mouseY;
         let isFinePointer = window.matchMedia('(pointer: fine)').matches;
+        let handPointerActive = false;
+        let handPointerTargetX = mouseX;
+        let handPointerTargetY = mouseY;
+        // Amplify hand motion around the screen center so the cursor covers
+        // the display without requiring large physical arm movements.
+        const handPointerGainX = 3.0;
+        const handPointerGainY = 3.0;
 
         if (isFinePointer) {
             document.addEventListener('mousemove', (e) => {
+                handPointerActive = false;
                 mouseX = e.clientX;
                 mouseY = e.clientY;
                 cursorEl.classList.add('visible');
@@ -1227,6 +1521,51 @@
             setupCursorHoverListeners();
         }
 
+        // POINT uses the existing JARVIS cursor as its target. Coordinates
+        // follow the index fingertip; the RAF loop below handles visual motion.
+        function updateHandCursor(handState) {
+            const pointHand = handState?.tracking
+                ? ((handState.hands || []).find((hand) => hand.role === 'primary' &&
+                    String(hand.gesture || '').toUpperCase() === 'POINT') ||
+                   (handState.hands || []).find((hand) => String(hand.gesture || '').toUpperCase() === 'POINT'))
+                : null;
+            const isFresh = pointHand && Array.isArray(pointHand.landmarks) &&
+                pointHand.landmarks.length === 21 &&
+                (Date.now() / 1000 - handState.timestamp) < 0.65;
+            if (!isFresh) {
+                if (handPointerActive) cursorEl.classList.remove('visible');
+                handPointerActive = false;
+                return;
+            }
+
+            const indexTip = pointHand.landmarks[8];
+            const normalizedX = 1 - indexTip.x;
+            const normalizedY = indexTip.y;
+            const amplifiedX = 0.5 + (normalizedX - 0.5) * handPointerGainX;
+            const amplifiedY = 0.5 + (normalizedY - 0.5) * handPointerGainY;
+            handPointerTargetX = Math.max(0, Math.min(1, amplifiedX)) * window.innerWidth;
+            handPointerTargetY = Math.max(0, Math.min(1, amplifiedY)) * window.innerHeight;
+            handPointerActive = true;
+            cursorEl.classList.add('visible');
+        }
+
+        function activateHandCursorTarget() {
+            const hitTarget = document.elementFromPoint(mouseX, mouseY);
+            if (!hitTarget) return false;
+
+            // AIR_TAP and POINT_HOLD activate the control under the hand cursor
+            // using the same click handler as a normal mouse click.
+            const target = hitTarget.closest('button, a, input, textarea, select, [role="button"]') || hitTarget;
+            if (target.matches('button:disabled, input:disabled, textarea:disabled, select:disabled')) return false;
+
+            if (typeof target.click === 'function') target.click();
+            else target.dispatchEvent(new MouseEvent('click', {
+                bubbles: true, cancelable: true, view: window,
+                clientX: mouseX, clientY: mouseY,
+            }));
+            return true;
+        }
+
         // --- APPLICATION STATE & INTEGRATION ---
         const clock = new THREE.Clock();
         let jarvisState = 'idle';
@@ -1234,6 +1573,62 @@
         let lastEventId = 0;
         let pollInFlight = false;
         let pollTimer = null;
+
+        function drawHandTrackingFrame(state) {
+            const canvas = document.getElementById('hand-tracking-canvas');
+            const panel = document.getElementById('hand-tracking-panel');
+            if (!canvas || !panel || !panel.classList.contains('active')) return;
+
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const hands = state.tracking ? (state.hands || []) : [];
+            const connections = [
+                [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8],
+                [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16],
+                [13, 17], [0, 17], [17, 18], [18, 19], [19, 20]
+            ];
+            for (const hand of hands) {
+                if (!hand.landmarks) continue;
+                ctx.strokeStyle = 'rgba(104, 211, 145, 0.7)';
+                ctx.lineWidth = 1.5;
+                for (const [a, b] of connections) {
+                    const p1 = hand.landmarks[a];
+                    const p2 = hand.landmarks[b];
+                    if (!p1 || !p2) continue;
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x * canvas.width, p1.y * canvas.height);
+                    ctx.lineTo(p2.x * canvas.width, p2.y * canvas.height);
+                    ctx.stroke();
+                }
+                ctx.fillStyle = 'rgba(255, 170, 0, 0.9)';
+                for (const point of hand.landmarks) {
+                    ctx.beginPath();
+                    ctx.arc(point.x * canvas.width, point.y * canvas.height, 2.5, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            }
+        }
+
+        const handStateStream = new EventSource('/api/hand-state/stream');
+        handStateStream.onmessage = (message) => {
+            try {
+                const payload = JSON.parse(message.data);
+                latestHandState = payload.state;
+                latestHandStateReceivedAt = performance.now();
+                updateHandCursor(latestHandState);
+                drawHandTrackingFrame(latestHandState);
+                applyHandInteractionCommands(handInteraction.update(latestHandState, {
+                    x: masterCoreGroup.position.x,
+                    y: masterCoreGroup.position.y,
+                    z: masterCoreGroup.position.z,
+                    scale: masterCoreGroup.scale.x,
+                    rotationX: masterCoreGroup.rotation.x,
+                    rotationY: masterCoreGroup.rotation.y
+                }));
+            } catch (_) {
+                // Ignore malformed sensor snapshots; the render loop keeps its last valid state.
+            }
+        };
 
         // Real Speech Envelope State from Backend
         let currentSpeechEnvelope = null;
@@ -1537,117 +1932,24 @@
                             }
                         }
                         addChatLine(`[SYSTEM] Hand Tracking is now ${event.state}`, 'assistant');
-                    } else if (event.type === 'hand_tracking_frame') {
-                        const canvas = document.getElementById('hand-tracking-canvas');
-                        const panel = document.getElementById('hand-tracking-panel');
-                        const dataText = document.getElementById('hand-tracking-data');
-                        
-                        if (canvas && panel && panel.classList.contains('active')) {
-                            const ctx = canvas.getContext('2d');
-                            ctx.clearRect(0, 0, canvas.width, canvas.height);
-                            
-                            let infoStr = `FPS: ${event.fps || 0} | `;
-                            let anyPinching = false;
-                            
-                            if (!event.hands || event.hands.length === 0) {
-                                infoStr += "NO HANDS";
-                            } else {
-                                event.hands.forEach(hand => {
-                                    infoStr += `${hand.hand.toUpperCase()}: ${hand.gesture} `;
-                                    
-                                    if (hand.landmarks) {
-                                        // Pinch interaction logic
-                                        const thumb = hand.landmarks[4];
-                                        const index = hand.landmarks[8];
-                                        const pinchDist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
-                                        const isPinching = pinchDist < 0.05;
-                                        
-                                        if (isPinching) {
-                                            anyPinching = true;
-                                            const px = (thumb.x + index.x) / 2;
-                                            const py = (thumb.y + index.y) / 2;
-                                            
-                                            if (!isGrabbing) {
-                                                isGrabbing = true;
-                                                smoothedPx = px;
-                                                smoothedPy = py;
-                                                grabStartX = px;
-                                                grabStartY = py;
-                                                coreStartX = masterCoreGroup.position.x;
-                                                coreStartY = masterCoreGroup.position.y;
-                                                
-                                                masterCoreGroup.scale.setScalar(1.2);
-                                                addChatLine(`[INTERACTION] Grabbed holographic core`, 'assistant');
-                                            } else {
-                                                // Exponential smoothing on raw coordinates
-                                                smoothedPx += (px - smoothedPx) * 0.3;
-                                                smoothedPy += (py - smoothedPy) * 0.3;
-
-                                                const dx = smoothedPx - grabStartX;
-                                                const dy = smoothedPy - grabStartY;
-                                                
-                                                // Map to world space broadly (X is inverted for webcam mirror)
-                                                targetCorePosX = coreStartX - (dx * 350); 
-                                                targetCorePosY = coreStartY - (dy * 350); 
-                                            }
-                                        }
-
-                                        const cw = canvas.width;
-                                        const ch = canvas.height;
-                                        
-                                        // Draw connections
-                                        const CONNECTIONS = [
-                                            [0, 1], [1, 2], [2, 3], [3, 4],
-                                            [0, 5], [5, 6], [6, 7], [7, 8],
-                                            [5, 9], [9, 10], [10, 11], [11, 12],
-                                            [9, 13], [13, 14], [14, 15], [15, 16],
-                                            [13, 17], [0, 17], [17, 18], [18, 19], [19, 20]
-                                        ];
-                                        
-                                        ctx.strokeStyle = 'rgba(104, 211, 145, 0.7)';
-                                        ctx.lineWidth = 1.5;
-                                        
-                                        CONNECTIONS.forEach(conn => {
-                                            const p1 = hand.landmarks[conn[0]];
-                                            const p2 = hand.landmarks[conn[1]];
-                                            if (p1 && p2) {
-                                                ctx.beginPath();
-                                                ctx.moveTo(p1.x * cw, p1.y * ch);
-                                                ctx.lineTo(p2.x * cw, p2.y * ch);
-                                                ctx.stroke();
-                                            }
-                                        });
-                                        
-                                        // Draw points
-                                        ctx.fillStyle = 'rgba(255, 170, 0, 0.9)';
-                                        hand.landmarks.forEach(lm => {
-                                            ctx.beginPath();
-                                            ctx.arc(lm.x * cw, lm.y * ch, 2.5, 0, 2 * Math.PI);
-                                            ctx.fill();
-                                        });
-                                    }
-                                });
-                            }
-                            if (dataText) dataText.textContent = infoStr;
-                            
-                            if (!anyPinching && isGrabbing) {
-                                isGrabbing = false;
-                                targetCorePosX = 0;
-                                targetCorePosY = 0;
-                                masterCoreGroup.scale.setScalar(1.0);
-                                addChatLine(`[INTERACTION] Released holographic core`, 'assistant');
-                            }
-                        }
-                    } else if (event.type === 'motion') {
+                    } else if (event.type === 'swipe' || event.type === 'motion') {
                         const dir = event.direction;
-                        const vel = event.velocity || 0;
-                        if (dir === 'LEFT') coreSpinVY -= vel * 0.15;
-                        if (dir === 'RIGHT') coreSpinVY += vel * 0.15;
-                        if (dir === 'UP') coreSpinVX -= vel * 0.15;
-                        if (dir === 'DOWN') coreSpinVX += vel * 0.15;
-                        addChatLine(`[INTERACTION] Swipe ${dir} rotating core`, 'assistant');
+                        addChatLine(`[SENSOR] Swipe ${dir} detected (semantic event only)`, 'user');
                     } else if (event.type === 'gesture') {
-                        addChatLine(`[SENSOR] Gesture: ${event.gesture} (${event.hand}) - ${(event.confidence*100).toFixed(0)}%`, 'user');
+                        const phase = event.phase || 'START';
+                        const confidence = Number.isFinite(event.confidence) ? ` ${(event.confidence * 100).toFixed(0)}%` : '';
+                        lastGestureDeliveryLatencyMs = Number.isFinite(event.timestamp)
+                            ? Math.max(0, (Date.now() / 1000 - event.timestamp) * 1000) : null;
+                        if (event.gesture === 'AIR_TAP' && phase === 'SELECT') {
+                            activateHandCursorTarget();
+                            cursorEl.classList.add('active');
+                            window.setTimeout(() => cursorEl.classList.remove('active'), 120);
+                        } else if (event.gesture === 'point_hold' && phase === 'START') {
+                            activateHandCursorTarget();
+                            cursorEl.classList.add('active');
+                            window.setTimeout(() => cursorEl.classList.remove('active'), 120);
+                        }
+                        addChatLine(`[SENSOR] ${event.gesture} ${phase} (${event.hand})${confidence}`, 'user');
                     } else if (event.type === 'error') {
                         addChatLine(event.text, 'error');
                         setBackendState('error');
@@ -1673,12 +1975,33 @@
             requestAnimationFrame(animate);
             const delta = clock.getDelta();
             const time = clock.getElapsedTime();
+            uiFrameCount += 1;
+            const frameWindowElapsed = performance.now() - uiFrameWindowStart;
+            if (frameWindowElapsed >= 3000) {
+                uiMeasuredFps = uiFrameCount * 1000 / frameWindowElapsed;
+                if (latestHandState.tracking) {
+                    console.info('[HAND PERFORMANCE]', {
+                        sensorFps: latestHandState.fps || null,
+                        uiRenderFps: Math.round(uiMeasuredFps),
+                        sensorSnapshotAgeMs: latestHandStateReceivedAt
+                            ? Math.round(performance.now() - latestHandStateReceivedAt) : null,
+                        gestureDeliveryLatencyMs: lastGestureDeliveryLatencyMs
+                    });
+                }
+                uiFrameCount = 0;
+                uiFrameWindowStart = performance.now();
+            }
 
             // Smooth camera lerp for voice vs text mode
             camera.position.z += (targetCameraDistance - camera.position.z) * 0.08;
 
             // Smooth Custom Cursor Momentum
-            if (isFinePointer) {
+            if (isFinePointer || handPointerActive) {
+                if (handPointerActive) {
+                    const cursorLerp = 1 - Math.exp(-delta / 0.075);
+                    mouseX += (handPointerTargetX - mouseX) * cursorLerp;
+                    mouseY += (handPointerTargetY - mouseY) * cursorLerp;
+                }
                 reticleX += (mouseX - reticleX) * 0.22;
                 reticleY += (mouseY - reticleY) * 0.22;
                 cursorEl.style.transform = `translate3d(${mouseX}px, ${mouseY}px, 0)`;
@@ -1763,17 +2086,24 @@
             const isSpeaking = jarvisState === 'speaking';
             const isError = jarvisState === 'error';
 
-            // Apply interaction physics (Pinch-to-move and Swipe-to-spin)
-            masterCoreGroup.position.x += (targetCorePosX - masterCoreGroup.position.x) * 0.15;
-            masterCoreGroup.position.y += (targetCorePosY - masterCoreGroup.position.y) * 0.15;
+            // Expire an abandoned sensor snapshot even if the stream closes silently.
+            if (handInteraction.anchor && (Date.now() / 1000 - latestHandState.timestamp) >= 0.65) {
+                applyHandInteractionCommands(handInteraction.update({ ...latestHandState, tracking: false }, {
+                    x: masterCoreGroup.position.x, y: masterCoreGroup.position.y,
+                    z: masterCoreGroup.position.z, scale: masterCoreGroup.scale.x,
+                    rotationX: masterCoreGroup.rotation.x, rotationY: masterCoreGroup.rotation.y
+                }));
+            }
+            // Render-time exponential interpolation is independent of MediaPipe cadence.
+            const handLerp = 1 - Math.exp(-delta / 0.12);
+            masterCoreGroup.position.x += (coreInteractionTarget.x - masterCoreGroup.position.x) * handLerp;
+            masterCoreGroup.position.y += (coreInteractionTarget.y - masterCoreGroup.position.y) * handLerp;
+            masterCoreGroup.position.z += (coreInteractionTarget.z - masterCoreGroup.position.z) * handLerp;
+            const nextCoreScale = masterCoreGroup.scale.x + (coreInteractionTarget.scale - masterCoreGroup.scale.x) * handLerp;
+            masterCoreGroup.scale.setScalar(nextCoreScale);
+            masterCoreGroup.rotation.x += (coreInteractionTarget.rotationX - masterCoreGroup.rotation.x) * handLerp;
+            masterCoreGroup.rotation.y += (coreInteractionTarget.rotationY - masterCoreGroup.rotation.y) * handLerp;
             
-            masterCoreGroup.rotation.y += coreSpinVY;
-            masterCoreGroup.rotation.x += coreSpinVX;
-            
-            // Damping for swipe spin
-            coreSpinVX *= 0.95;
-            coreSpinVY *= 0.95;
-
             const thinkingMultiplier = isThinking ? 2.8 : (isOffline ? 0.2 : 1.0);
             const speakingSpin = isSpeaking ? (1.0 + currentAmplitude * 2.2) : 1.0;
 

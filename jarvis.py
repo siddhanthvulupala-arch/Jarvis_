@@ -758,10 +758,11 @@ def start_ui_bridge():
         ui_bridge.set_telemetry_provider(get_jarvis_telemetry)
         ui_url = ui_bridge.start()
         print("JARVIS UI bridge:", ui_url)
-        try:
-            webbrowser.open(ui_url)
-        except Exception as error:
-            print("Could not open the JARVIS UI automatically:", error)
+        if not os.getenv("JARVIS_NO_BROWSER"):
+            try:
+                webbrowser.open(ui_url)
+            except Exception as error:
+                print("Could not open the JARVIS UI automatically:", error)
     except UIBridgeError as error:
         ui_bridge = None
         print(f"\n[FATAL] JARVIS UI bridge error: {error}\nAborting startup.")

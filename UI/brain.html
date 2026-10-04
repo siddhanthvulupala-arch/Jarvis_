@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JARVIS // 3D Human Brain Model</title>
+  <link rel="stylesheet" href="./css/brain.css">
+
+  <script>
+    // Browser Telemetry & Error Logging
+    function remoteLog(type, msg) {
+      try {
+        fetch('/api/log?' + type + '=' + encodeURIComponent(msg));
+      } catch(e) {}
+    }
+    window.addEventListener('error', (e) => {
+      remoteLog('error', `${e.message} (${e.filename}:${e.lineno})`);
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      remoteLog('error', 'Unhandled rejection: ' + (e.reason?.stack || e.reason));
+    });
+    const origLog = console.log;
+    console.log = (...args) => {
+      origLog(...args);
+      remoteLog('msg', args.join(' '));
+    };
+    const origErr = console.error;
+    console.error = (...args) => {
+      origErr(...args);
+      remoteLog('error', args.join(' '));
+    };
+  </script>
+
+  <!-- ESM Import Map for Three.js and Addons -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three.module.js",
+      "three/addons/": "./vendor/"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <!-- WebGL Render Canvas Container -->
+  <div id="canvas-container"></div>
+
+  <!-- Ambient Holographic Vignette -->
+  <div class="vignette-overlay"></div>
+
+  <!-- Interactive Feedback Toast -->
+  <div id="impulse-indicator">NEURAL IMPULSE FIRED</div>
+
+  <!-- Loading Screen -->
+  <div id="loader-overlay">
+    <div class="loader-spinner"></div>
+    <div class="loader-text" id="loader-status">INITIALIZING CEREBRAL TOPOGRAPHY</div>
+    <div class="telemetry-badge" id="loader-percent">0%</div>
+  </div>
+
+  <!-- UI Overlay Layer -->
+  <div class="ui-layer">
+    <!-- Top Header -->
+    <header class="top-bar">
+      <div class="brand-title">
+        <div class="brand-icon"></div>
+        <div class="title-text">
+          <h1>JARVIS // CEREBRAL TOPOGRAPHY</h1>
+          <span>HUMAN BRAIN 3D ANATOMICAL MODEL // STEP 1</span>
+        </div>
+      </div>
+
+      <div class="top-actions">
+        <div class="telemetry-badge" id="poly-stats">CALCULATING GEOMETRY...</div>
+        
+        <!-- Shading Theme Selectors -->
+        <button class="hud-btn theme-btn active" data-theme="cyan">CYAN HOLO</button>
+        <button class="hud-btn theme-btn" data-theme="amber">ARC AMBER</button>
+        <button class="hud-btn theme-btn" data-theme="violet">NEON VIOLET</button>
+        <button class="hud-btn theme-btn" data-theme="emerald">TACTICAL</button>
+
+        <button class="hud-btn active" id="btn-auto-rotate">AUTO-ROTATE: ON</button>
+        <button class="hud-btn" id="btn-reset-view">RESET VIEW</button>
+      </div>
+    </header>
+
+    <!-- Floating View Presets Dock -->
+    <div class="floating-controls">
+      <div class="view-preset-group">
+        <button class="preset-btn active" data-preset="iso">ISOMETRIC</button>
+        <button class="preset-btn" data-preset="front">ANTERIOR (FRONT)</button>
+        <button class="preset-btn" data-preset="top">SUPERIOR (TOP)</button>
+        <button class="preset-btn" data-preset="back">POSTERIOR (BACK)</button>
+        <button class="preset-btn" data-preset="left">LEFT HEMISPHERE</button>
+        <button class="preset-btn" data-preset="right">RIGHT HEMISPHERE</button>
+      </div>
+    </div>
+
+    <!-- Bottom Interaction Hints Bar -->
+    <footer class="bottom-bar">
+      <div class="interaction-hints">
+        <div class="hint-item"><span class="hint-key">L-CLICK + DRAG:</span> Rotate</div>
+        <div class="hint-item"><span class="hint-key">R-CLICK + DRAG:</span> Pan</div>
+        <div class="hint-item"><span class="hint-key">SCROLL:</span> Zoom</div>
+        <div class="hint-item"><span class="hint-key">CLICK BRAIN:</span> Trigger Impulse Wave</div>
+        <div class="hint-item"><span class="hint-key">DBL-CLICK:</span> Reset Camera</div>
+      </div>
+
+      <div class="telemetry-badge">
+        SYS: WEBGL 2.0 // STATUS: OPTIMAL
+      </div>
+    </footer>
+  </div>
+
+  <!-- Main Viewer Application Module -->
+  <script type="module" src="./js/brain_viewer.js"></script>
+</body>
+</html>
