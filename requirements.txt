@@ -8,3 +8,7 @@ scipy
 sounddevice
 soundfile
 sympy
+pywebview
+opencv-python
+mediapipe
+psutil
